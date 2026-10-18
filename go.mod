@@ -9,7 +9,7 @@ require (
 	github.com/cloudwego/eino v0.9.21
 	github.com/oagentkit/guardx v0.1.2
 	github.com/oagentkit/textx v0.1.0
-	github.com/oekit/pkg v0.13.0
+	github.com/oekit/pkg v0.14.0
 	gopkg.in/yaml.v3 v3.0.1
 )
 
