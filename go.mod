@@ -7,8 +7,8 @@ toolchain go1.27.2
 require (
 	github.com/Masterminds/semver/v3 v3.3.1
 	github.com/cloudwego/eino v0.9.21
-	github.com/oagentkit/guardx v0.1.2
-	github.com/oagentkit/textx v0.1.0
+	github.com/oagentkit/guardx v0.2.0
+	github.com/oagentkit/textx v0.2.0
 	github.com/oekit/pkg v0.14.0
 	gopkg.in/yaml.v3 v3.0.1
 )
