@@ -20,6 +20,7 @@ go get github.com/oagentkit/skillkit
 
 ## 外部依赖地板
 
+- `github.com/cloudwego/eino`
 - `gopkg.in/yaml.v3`
 - `github.com/Masterminds/semver/v3`
 
