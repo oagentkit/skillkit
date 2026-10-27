@@ -72,8 +72,8 @@ github.com/nikolalohinski/gonja v1.5.3 h1:GsA+EEaZDZPGJ8JtpeGN78jidhOlxeJROpqMT9
 github.com/nikolalohinski/gonja v1.5.3/go.mod h1:RmjwxNiXAEqcq1HeK5SSMmqFJvKOfTfXhkJv6YBtPa4=
 github.com/oagentkit/guardx v0.15.0 h1:IkyPq2yehC/wBuviRF2loU14xxrY78pyHGzJuAjGgjc=
 github.com/oagentkit/guardx v0.15.0/go.mod h1:+GcaTjNHL0mqClzpTSvQ242DN6ouEqk/5IeWy1PTL/I=
-github.com/oagentkit/textx v0.6.2 h1:5fIrtVyPsTYbV9JZf6p71lOpVgwUfrzRGQF+hirbALA=
-github.com/oagentkit/textx v0.6.2/go.mod h1:Siea8u2Jl1NxTfQ1oxuoRkzBwEJnugptr8rdbQ8Icmw=
+github.com/oagentkit/textx v0.7.1 h1:6njnv8iIKxuab1aOucLyBuhluiYUrFf5PEgjayc88cc=
+github.com/oagentkit/textx v0.7.1/go.mod h1:qIEWOZjIwUBV8d+ZkLSHnQm+BvnutCmPscqvobglVIM=
 github.com/oekit/pkg v0.28.0 h1:I3zrO2keJri8a4/h8Up8gHHUYOzktlQqjKtf+yOK3wo=
 github.com/oekit/pkg v0.28.0/go.mod h1:sVeOtmG1sLY2aSnzFIbUAF2Qoh7G8R5vnWtWmLCv8NM=
 github.com/onsi/ginkgo v1.6.0/go.mod h1:lLunBs/Ym6LB5Z9jYTR76FiuTmxDTDusOGeTQH+WWjE=
