@@ -5,7 +5,7 @@ go 1.24.0
 require (
 	github.com/Masterminds/semver/v3 v3.3.1
 	github.com/cloudwego/eino v0.9.21
-	github.com/oagentkit/guardx v0.15.0
+	github.com/oagentkit/guardx v0.17.0
 	github.com/oagentkit/textx v0.7.1
 	github.com/oekit/pkg v0.31.0
 	gopkg.in/yaml.v3 v3.0.1
