@@ -67,7 +67,7 @@ func TestFileProviderCRLFRegression(t *testing.T) {
 }
 
 // RewriteBody 围栏语义唯一事实源（skillkit#33）：frontmatter 内缩进的 `---`
-//（YAML 块标量里的分隔线）不是闭合——此前按 isFenceLine TrimSpace 判闭合，
+// （YAML 块标量里的分隔线）不是闭合——此前按 isFenceLine TrimSpace 判闭合，
 // 编辑路径把元数据截断且输出不可再解析（同输入 ParseRichFrontmatter 正常）。
 func TestRewriteBodyKeepsIndentedFenceInBlockScalar(t *testing.T) {
 	src := "---\nname: demo\ndescription: |\n  Section A\n  ---\n  Section B\nversion: 1.0.0\n---\n\nOLD BODY\n"
