@@ -7,7 +7,8 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// findClosingFence 在起始围栏之后的内容里定位闭合 ---（语义见 isFenceLine）。
+// findClosingFence 在起始围栏之后的内容里定位闭合 ---（闭合围栏唯一事实源：
+// 列 0 ---，允许行尾空白/CRLF；「---x」不是围栏）。
 // 返回块终点（闭合行前的 \n 处）与正文起点（闭合行之后）；未闭合 ok=false。
 func findClosingFence(rest string) (blockEnd, bodyStart int, ok bool) {
 	for off := 0; ; {
