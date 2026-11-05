@@ -7,15 +7,23 @@ package skill
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"github.com/oekit/pkg/encoding"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+
+	"github.com/oekit/pkg/encoding"
 )
 
 // Ref 内容引用。
+//
+// Version 是**请求约束**（oagentkit/skillkit#37）：非空时两侧 Provider 都会
+// 校验——解析出的 skill 版本 ≠ 请求版本即报错（此前 FileProvider 只拿它当
+// 缓存键、Library 完全忽略，约束静默裸奔：请求 2.0.0 拿回 1.0.0 也成功）。
+// 校验用精确匹配（decl/version 的区间约束走 Decl 面构建 ref）。
 type Ref struct {
 	Name    string
 	Version string
@@ -61,6 +69,12 @@ type Provider interface {
 
 // FileProvider file 来源实现：root/<name>/SKILL.md 或 root/<name>.md。
 type FileProvider struct {
+	// OnCorrupt 单个 skill 解析失败回调（nil 安全，oagentkit/skillkit#36）：
+	// ListSkills 对损坏条目 continue 跳过（发现不阻塞），损坏经此观测——
+	// 此前静默丢弃，清单缺一条无从归因。本仓不引入日志依赖（tier 纪律），
+	// 宿主经回调接告警面。
+	OnCorrupt func(name string, err error)
+
 	Root string
 
 	mu      sync.RWMutex
@@ -136,17 +150,33 @@ func (p *FileProvider) loadSkill(ref Ref, name string) (*Skill, error) {
 		filepath.Join(p.Root, name+".md"),
 	}
 	var data []byte
+	var readErr error
 	for _, c := range candidates {
-		if b, err := os.ReadFile(c); err == nil {
+		b, err := os.ReadFile(c)
+		if err == nil {
 			data = b
 			break
 		}
+		if !errors.Is(err, fs.ErrNotExist) {
+			// 权限拒绝/I/O 错误不是「未找到」——原样记录并在全候选失败时
+			// 上抛（oagentkit/skillkit#36：此前任意 ReadFile 错误都被当
+			// 不存在吞掉，权限故障被误诊为文件缺失，排查方向完全反了）
+			readErr = err
+		}
 	}
 	if data == nil {
+		if readErr != nil {
+			return nil, fmt.Errorf("skill: 读取 %s 失败: %w", ref.Name, readErr)
+		}
 		return nil, fmt.Errorf("skill: 未找到 %s（尝试 %v）", ref.Name, candidates)
 	}
 	// frontmatter 元数据剥离；checksum 对正文计算（canonical 口径，见 Skill.Checksum）
 	fmName, fmDesc, fmVer, body := parseFrontmatter(string(data))
+	// Version 请求约束兑现（oagentkit/skillkit#37）：请求版本非空且与
+	// frontmatter 声明不符即报错——此前只当缓存键，约束静默裸奔
+	if ref.Version != "" && fmVer != ref.Version {
+		return nil, fmt.Errorf("skill: %s 版本不符：请求 %s，库内 %s", ref.Name, ref.Version, fmVer)
+	}
 	displayName := ref.Name
 	if fmName != "" {
 		displayName = fmName
@@ -184,7 +214,13 @@ func (p *FileProvider) ListSkills(ctx context.Context) ([]Meta, error) {
 		}
 		s, err := p.Resolve(ctx, Ref{Name: refName})
 		if err != nil {
-			continue // 单个 skill 损坏不阻塞发现
+			// 单个 skill 损坏不阻塞发现，但要**留痕**（rag#33 同款教训：
+			// 静默丢弃让损坏无信号，清单缺一条无从归因）。本仓不引入日志
+			// 依赖（tier 纪律）——观测走 OnCorrupt 回调，宿主接线告警面。
+			if p.OnCorrupt != nil {
+				p.OnCorrupt(refName, err)
+			}
+			continue
 		}
 		title := ""
 		if s.Name != refName {
@@ -222,16 +258,31 @@ func (p *FileProvider) CanonicalName(ctx context.Context, name string) (string, 
 }
 
 func (p *FileProvider) scanAliases(ctx context.Context) map[string]string {
+	// 并发收敛 + 失败不缓存（oagentkit/skillkit#35）：此前吞掉 ListSkills
+	// 错误并把**空别名表**缓存进 p.aliases——一次瞬时目录错误（权限抖动/
+	// 挂载闪断）让展示名归一进程内永久失效（恒 not-found）；并发首扫各自
+	// 全目录 I/O 重复执行。
+	p.mu.Lock()
+	if p.aliases != nil {
+		m := p.aliases
+		p.mu.Unlock()
+		return m
+	}
+	p.mu.Unlock()
+
 	metas, err := p.ListSkills(ctx)
+	if err != nil {
+		// 失败不写缓存：下次调用重试（ListSkills 内部已对单 skill 损坏
+		// continue 容忍——走到这里的 err 是目录级故障，值得重试）
+		return map[string]string{}
+	}
 	m := map[string]string{}
-	if err == nil {
-		for _, meta := range metas {
-			if meta.Title != "" && meta.Title != meta.Name {
-				// 同 Title 取名字典序最小者——与 Library.byTitle 同一确定性规则
-				//（此前字典序扫描+后者覆盖=取最大者，与 Library 先到先得不同构）
-				if prev, exists := m[meta.Title]; !exists || meta.Name < prev {
-					m[meta.Title] = meta.Name
-				}
+	for _, meta := range metas {
+		if meta.Title != "" && meta.Title != meta.Name {
+			// 同 Title 取名字典序最小者——与 Library.byTitle 同一确定性规则
+			//（此前字典序扫描+后者覆盖=取最大者，与 Library 先到先得不同构）
+			if prev, exists := m[meta.Title]; !exists || meta.Name < prev {
+				m[meta.Title] = meta.Name
 			}
 		}
 	}

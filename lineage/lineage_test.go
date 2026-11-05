@@ -178,3 +178,29 @@ func TestSkillFromMeta(t *testing.T) {
 		t.Fatalf("SkillFromMeta 映射不符: %+v", got)
 	}
 }
+
+// sortFocus 边全键比较（skillkit#38）：同名异类节点（skill x / server x）
+// 间序此前不稳定，输出跨 run 不可复现违反确定性契约——同输入两次排序结果
+// 必须逐边相等（多次重复以暴露不稳定）。
+func TestSortFocusDeterministicSameNameDifferentKind(t *testing.T) {
+	build := func() *LineageFocus {
+		res := &LineageFocus{}
+		for i := 0; i < 32; i++ {
+			res.Edges = append(res.Edges,
+				LineageEdge{From: LineageNode{Kind: "skill", Name: "x"}, To: LineageNode{Kind: "server", Name: "x"}, Relation: "calls"},
+				LineageEdge{From: LineageNode{Kind: "skill", Name: "x"}, To: LineageNode{Kind: "tool", Name: "x"}, Relation: "lists"},
+			)
+		}
+		sortFocus(res)
+		return res
+	}
+	first := build()
+	for round := 0; round < 16; round++ {
+		next := build()
+		for i := range first.Edges {
+			if first.Edges[i] != next.Edges[i] {
+				t.Fatalf("第 %d 轮排序不稳定（同名异类节点间序漂移）: 边 %d %+v vs %+v", round, i, first.Edges[i], next.Edges[i])
+			}
+		}
+	}
+}

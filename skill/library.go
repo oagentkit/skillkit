@@ -66,11 +66,17 @@ type LibMeta struct {
 }
 
 // DeprecationExpired 弃用窗口是否已过（remove_after 当日结束算未过期）。
+//
+// 时区口径 = **UTC 日历日**（oagentkit/skillkit#39）：remove_after 是裸日期
+// 无时区语义，此前按 time.Local 解析——过期边界随宿主时区漂移最多一天
+// （容器 UTC 与业务东八区对「2026-11-06 是否已过期」差一整天），且与
+// agent-memory Resolver 的 UTC 口径跨包两套哲学。统一 UTC：裸日期的自然
+// 参照就是 UTC 日历日，跨宿主可复现。
 func (m LibMeta) DeprecationExpired(now time.Time) bool {
 	if m.Maturity != MaturityDeprecated || m.Deprecated == nil || m.Deprecated.RemoveAfter == "" {
 		return false
 	}
-	d, err := time.ParseInLocation("2006-01-02", m.Deprecated.RemoveAfter, time.Local)
+	d, err := time.ParseInLocation("2006-01-02", m.Deprecated.RemoveAfter, time.UTC)
 	if err != nil {
 		return false
 	}
@@ -323,6 +329,11 @@ func (l *Library) Resolve(_ context.Context, ref Ref) (*Skill, error) {
 	e, ok := l.byName[ref.Name]
 	if !ok {
 		return nil, fmt.Errorf("skill: 技能 %q 不存在", ref.Name)
+	}
+	// Version 请求约束兑现（oagentkit/skillkit#37）：此前 Library 完全忽略
+	// 该字段——请求 2.0.0 静默返回 1.0.0。精确匹配；区间约束走 Decl 面构建 ref
+	if ref.Version != "" && e.Meta.Version != ref.Version {
+		return nil, fmt.Errorf("skill: 技能 %s 版本不符：请求 %s，库内 %s", ref.Name, ref.Version, e.Meta.Version)
 	}
 	return &Skill{
 		Name:        ref.Name,

@@ -470,7 +470,16 @@ func sortFocus(res *LineageFocus) {
 		if a.From.Name != b.From.Name {
 			return a.From.Name < b.From.Name
 		}
-		return a.To.Name < b.To.Name
+		// 全键比较（oagentkit/skillkit#38）：同名异类节点（skill "x" 与
+		// server "x"）此前比较键相同，sort.Slice 不稳定 ⇒ 输出序跨 run
+		// 不可复现，违反包头的确定性契约。To.Kind 与 Relation 补齐。
+		if a.To.Kind != b.To.Kind {
+			return a.To.Kind < b.To.Kind
+		}
+		if a.To.Name != b.To.Name {
+			return a.To.Name < b.To.Name
+		}
+		return a.Relation < b.Relation
 	})
 }
 
