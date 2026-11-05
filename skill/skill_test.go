@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -94,5 +95,94 @@ func TestFileProviderVersionedCache(t *testing.T) {
 	// 不同版本应独立缓存
 	if s1 == s2 {
 		t.Fatal("不同版本不应共享缓存")
+	}
+}
+
+// Ref.Version 请求约束兑现（skillkit#37）：此前 FileProvider 只当缓存键、
+// Library 完全忽略——请求 2.0.0 拿回 1.0.0 也静默成功（约束裸奔）。
+func TestRefVersionConstraintEnforced(t *testing.T) {
+	dir := t.TempDir()
+	_ = os.MkdirAll(filepath.Join(dir, "sop"), 0o755)
+	_ = os.WriteFile(filepath.Join(dir, "sop", "SKILL.md"),
+		[]byte("---\nname: sop\nversion: 1.2.3\ndescription: d\n---\n\nBODY"), 0o644)
+	fp := NewFileProvider(dir)
+	// 版本不符报错（不再静默返回 1.2.3）
+	_, err := fp.Resolve(context.Background(), Ref{Name: "sop", Version: "2.0.0"})
+	if err == nil || !strings.Contains(err.Error(), "版本不符") {
+		t.Fatalf("版本不符应报错: %v", err)
+	}
+	// 匹配版本与空版本（不约束）照常
+	if _, err := fp.Resolve(context.Background(), Ref{Name: "sop", Version: "1.2.3"}); err != nil {
+		t.Fatalf("匹配版本应通过: %v", err)
+	}
+	if _, err := fp.Resolve(context.Background(), Ref{Name: "sop"}); err != nil {
+		t.Fatalf("空版本不约束: %v", err)
+	}
+}
+
+// loadSkill 区分 ErrNotExist 与其余错误（skillkit#36）：权限拒绝不再误诊为
+// 「未找到」。
+func TestLoadSkillPermissionError(t *testing.T) {
+	dir := t.TempDir()
+	_ = os.MkdirAll(filepath.Join(dir, "sop"), 0o755)
+	p := filepath.Join(dir, "sop", "SKILL.md")
+	_ = os.WriteFile(p, []byte("---\nname: sop\n---\n\nBODY"), 0o000) // 权限拒绝
+	fp := NewFileProvider(dir)
+	_, err := fp.Resolve(context.Background(), Ref{Name: "sop"})
+	if err == nil {
+		t.Fatal("权限拒绝应报错")
+	}
+	if strings.Contains(err.Error(), "未找到") {
+		t.Fatalf("权限拒绝不得误诊为未找到: %v", err)
+	}
+	// 缺文件仍报「未找到」
+	_, err = fp.Resolve(context.Background(), Ref{Name: "absent"})
+	if err == nil || !strings.Contains(err.Error(), "未找到") {
+		t.Fatalf("缺文件应报未找到: %v", err)
+	}
+}
+
+// scanAliases 失败不缓存（skillkit#35）：一次瞬时目录错误不再让展示名归一
+// 进程内永久失效——失败后下次调用重试。
+func TestScanAliasesErrorNotCached(t *testing.T) {
+	dir := t.TempDir()
+	_ = os.MkdirAll(filepath.Join(dir, "sop"), 0o755)
+	_ = os.WriteFile(filepath.Join(dir, "sop", "SKILL.md"),
+		[]byte("---\nname: 标准作业程序\nversion: 1.0.0\ndescription: d\n---\n\nBODY"), 0o644)
+	fp := NewFileProvider(dir)
+	m := fp.scanAliases(context.Background())
+	if m["标准作业程序"] != "sop" {
+		t.Fatalf("别名扫描应命中: %+v", m)
+	}
+	// 成功结果已缓存（快路径）
+	fp.mu.RLock()
+	cached := fp.aliases
+	fp.mu.RUnlock()
+	if cached == nil {
+		t.Fatal("成功结果应写缓存")
+	}
+}
+
+// ListSkills 损坏条目经 OnCorrupt 留痕（skillkit#36）：静默丢弃让损坏无信号。
+func TestListSkillsOnCorrupt(t *testing.T) {
+	dir := t.TempDir()
+	_ = os.MkdirAll(filepath.Join(dir, "good"), 0o755)
+	_ = os.WriteFile(filepath.Join(dir, "good", "SKILL.md"),
+		[]byte("---\nname: good\ndescription: d\n---\n\nBODY"), 0o644)
+	// bad 目录无 SKILL.md（Resolve 报「未找到」——发现面唯一真实损坏形态：
+	// frontmatter 解析是宽松语义，unclosed 围栏整份当正文不算损坏）
+	_ = os.MkdirAll(filepath.Join(dir, "bad"), 0o755)
+	fp := NewFileProvider(dir)
+	var corrupted []string
+	fp.OnCorrupt = func(name string, err error) { corrupted = append(corrupted, name) }
+	metas, err := fp.ListSkills(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(metas) != 1 || metas[0].Name != "good" {
+		t.Fatalf("完好条目应照常列出: %+v", metas)
+	}
+	if len(corrupted) != 1 || corrupted[0] != "bad" {
+		t.Fatalf("损坏条目应经 OnCorrupt 留痕: %v", corrupted)
 	}
 }

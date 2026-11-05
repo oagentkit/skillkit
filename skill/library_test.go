@@ -152,7 +152,7 @@ func TestChecksumConsistentAcrossProviders(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(fp.Root, "sop", "SKILL.md"), []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	s1, err := fp.Resolve(context.Background(), Ref{Name: "sop", Version: "9.9.9"})
+	s1, err := fp.Resolve(context.Background(), Ref{Name: "sop"})
 	if err != nil {
 		t.Fatal(err)
 	}
