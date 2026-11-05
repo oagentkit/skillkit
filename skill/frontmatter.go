@@ -7,12 +7,6 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// isFenceLine 闭合围栏判定（全部 frontmatter 入口的唯一事实源）：
-// --- 独立成行，允许行尾空白/CRLF。「---x」不是围栏——半个词的围栏会把正文吞进元数据。
-func isFenceLine(line string) bool {
-	return strings.TrimSpace(line) == "---"
-}
-
 // findClosingFence 在起始围栏之后的内容里定位闭合 ---（语义见 isFenceLine）。
 // 返回块终点（闭合行前的 \n 处）与正文起点（闭合行之后）；未闭合 ok=false。
 func findClosingFence(rest string) (blockEnd, bodyStart int, ok bool) {
@@ -48,7 +42,7 @@ func splitFrontmatter(trimmed string) (block, body string, ok bool) {
 	}
 	rest := strings.TrimPrefix(trimmed[3:], "\r")
 	if !strings.HasPrefix(rest, "\n") {
-		return "", "", false // `---foo` 不是围栏（isFenceLine 同语义）
+		return "", "", false // `---foo` 不是围栏（起始围栏须独立成行）
 	}
 	blockEnd, bodyStart, closed := findClosingFence(rest)
 	if !closed {
