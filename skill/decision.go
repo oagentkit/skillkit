@@ -183,7 +183,13 @@ func ListPrompt(metas []Meta) string {
 			desc = "（无描述）"
 		}
 		if m.Title != "" && m.Title != m.Name {
-			fmt.Fprintf(&b, "- **%s**（%s）：%s\n", m.Name, m.Title, desc)
+			// Title 同属半可信（frontmatter name 引号标量可含 \n 转义），与
+			// Description 同一消毒口径（oagentkit/skillkit#34）：此前裸拼进
+			// 行首括注——description 里的注入被中和、title 里的原样越出条目，
+			// 同一威胁模型开了旁路。先折叠单行再消毒：折叠后的行首结构标记
+			// 由 EscapeUntrusted 中和。
+			title := fence.EscapeUntrusted(strings.Join(strings.Fields(m.Title), " "))
+			fmt.Fprintf(&b, "- **%s**（%s）：%s\n", m.Name, title, desc)
 		} else {
 			fmt.Fprintf(&b, "- **%s**：%s\n", m.Name, desc)
 		}

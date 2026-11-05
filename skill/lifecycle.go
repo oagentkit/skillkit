@@ -38,18 +38,20 @@ func RewriteBody(content, body string) (string, error) {
 	if !strings.HasPrefix(content, "---") {
 		return "", fmt.Errorf("skill: SKILL.md 无 frontmatter，无法编辑正文")
 	}
-	lines := strings.Split(content, "\n")
-	end := -1
-	for i := 1; i < len(lines); i++ {
-		if isFenceLine(lines[i]) { // 围栏语义与 findClosingFence 同一约定
-			end = i
-			break
-		}
+	rest := strings.TrimPrefix(content[3:], "\r")
+	if !strings.HasPrefix(rest, "\n") {
+		return "", fmt.Errorf("skill: SKILL.md 无 frontmatter，无法编辑正文")
 	}
-	if end < 0 {
+	// 围栏语义唯一事实源 = findClosingFence（列 0 闭合；oagentkit/skillkit#33）：
+	// 此前按 isFenceLine 逐行 TrimSpace 判闭合——frontmatter 内缩进的 `---`
+	// （YAML 块标量里的分隔线）被误当闭合，编辑路径把元数据截断（Section B
+	// 与 version 全丢），且输出不可再解析；同输入 ParseRichFrontmatter 正常。
+	blockEnd, _, closed := findClosingFence(rest)
+	if !closed {
 		return "", fmt.Errorf("skill: frontmatter 未闭合，拒绝编辑")
 	}
-	kept := strings.Join(lines[:end+1], "\n")
+	// kept = 起始围栏到闭合围栏行（含）：blockEnd 指向闭合 "---" 前的 \n
+	kept := content[:3+blockEnd] + "\n---"
 	return kept + "\n\n" + strings.TrimRight(body, "\n") + "\n", nil
 }
 
