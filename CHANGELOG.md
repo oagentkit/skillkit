@@ -2,6 +2,197 @@
 
 > 本文件由 `matrix-tools/scripts/gen_changelogs.py` 从 git 历史生成，按 tag 切段、取每段内的 conventional commit 渲染。
 
+## [v0.9.0] — 2026-11-06
+
+### 修复(skill,lineage)：Provider 语义五修——版本约束/错误区分/别名缓存/确定性/时区口径（#35-#39）
+
+skillkit#35——scanAliases 失败不缓存 + 首扫并发收敛：一次瞬时目录错误此前
+把空别名表缓存进 p.aliases（展示名归一进程内永久失效）；失败态下次调用
+重试，成功态快路径读缓存。
+skillkit#36——loadSkill 区分 fs.ErrNotExist 与其余 ReadFile 错误：权限拒绝
+不再误诊为「未找到」（全候选失败且有非NotExist错误时原样上抛）；
+ListSkills 损坏条目经新回调 OnCorrupt 留痕（本仓 tier 纪律不引日志依赖，
+宿主接线告警面；静默丢弃让清单缺一条无从归因）。
+skillkit#37——Ref.Version 请求约束兑现（两 Provider 都校验）：此前
+FileProvider 只当缓存键、Library 完全忽略，请求 2.0.0 静默返回 1.0.0；
+doc 从「声明无实现」改为「声明+实现一致」。精确匹配；区间约束走 Decl 面。
+skillkit#38——sortFocus 边比较器补 To.Kind/Relation 全键：同名异类节点间
+序此前不稳定（sort.Slice 不保证稳定序），跨 run 不可复现违反确定性契约。
+32 边 ×16 轮逐边相等钉子。
+skillkit#39——DeprecationExpired 改 UTC 解析：remove_after 裸日期此前按
+time.Local，过期边界随宿主时区漂移最多一天且与 agent-memory 的 UTC 口径
+跨包两套哲学。
+测试五组钉子；既有 checksum 测试的 9.9.9 请求改为不约束（版本约束生效后
+该请求按新语义本就该报错）。全仓 -race 绿。
+关联 oagentkit/skillkit#35 oagentkit/skillkit#36 oagentkit/skillkit#37 oagentkit/skillkit#38 oagentkit/skillkit#39
+Co-authored-by: Murphy-Yi <zhangyi@Murphy-YideMac-Mini.local>
+
+### 修复(skill)：ListPrompt Title 消毒 + RewriteBody 围栏语义归一
+
+* fix(skill): ListPrompt Title 消毒 + RewriteBody 围栏语义归一（#33 #34）
+skillkit#34——ListPrompt 的 doc 声称 Name/Title/Description 同属半可信、
+「消毒在出口统一兜底」，但只有 desc 过 EscapeUntrusted：Title（frontmatter
+name 引号标量可含 \n 转义）裸拼进行首括注——description 里的注入被中和、
+title 里的原样越出条目成为独立标题/伪列表项，同一威胁模型开了旁路。
+Title 先折叠单行再消毒（折叠后的行首结构标记由 EscapeUntrusted 中和）。
+skillkit#33——RewriteBody 按 isFenceLine（TrimSpace）逐行判闭合，与注释
+宣称的 findClosingFence 同一约定相悖：frontmatter 内缩进的 ---（YAML 块
+标量分隔线）被误当闭合，编辑路径截断元数据（Section B/version 全丢）且
+输出不可再解析；同输入 ParseRichFrontmatter 正常。RewriteBody 改走
+findClosingFence（围栏语义唯一事实源），isFenceLine 的「唯一事实源」注释
+随之修正为「起始围栏语义」。
+TestRewriteBodyKeepsIndentedFenceInBlockScalar（截断回归+输出可再解析）/
+TestRewriteBodyClosesAtColumnZeroFence（列 0 常规路径不回归）/
+TestListPromptTitleSanitized（注入越出条目钉子+中和不删内容+正常 Title
+不受影响）。全仓 -race 绿。
+关联 oagentkit/skillkit#33 oagentkit/skillkit#34
+* style: gofmt 对齐追加测试
+* chore: 删除已无调用方的 isFenceLine（RewriteBody 归一 findClosingFence 后退役；围栏语义唯一事实源收口）
+* docs: findClosingFence 注释自足（isFenceLine 退役后不再互相引用）
+---------
+Co-authored-by: Murphy-Yi <zhangyi@Murphy-YideMac-Mini.local>
+
+- 杂务(deps)：依赖地板追到最新——本轮新 tag（首轮 tidy 撞上新发版 proxy 延迟，重跑补完）
+
+Co-authored-by: Murphy-Yi <zhangyi@Murphy-YideMac-Mini.local>
+
+- 杂务(deps)：依赖地板追到最新——github.com/oekit/pkg v0.34.1
+
+| 依赖 | 现地板 | 抬到 |
+|---|---|---|
+| `github.com/oekit/pkg` | `v0.34.0` | `v0.34.1` |
+## 为什么
+矩阵的**发版时刻地板时效**门禁（`verify_tag_floor --ref HEAD`）要求：各仓 HEAD
+（= 下次发版会发出去的内容）的依赖地板，相对那一刻的依赖最新版本，不能已落后。
+oekit 基座与矩阵模块都在高频发版 ⇒ 地板是**跑步机**，落后一格就会判红。
+## 兼容性实测
+本工具在提交前跑完 `go build` / `go vet` / `go test -race -count=1 ./...`（全绿才提交）
+与 `go mod tidy -diff`（无漂移）⇒ 改动**只影响依赖版本**，零行为差异。
+只改 `go.mod` / `go.sum` ⇒ 不需要 CHANGELOG 条目（版本段由下次发版的 `prewrite` 生成）。
+Co-authored-by: Murphy-Yi <zhangyi@Murphy-YideMac-Mini.local>
+
+- 杂务(deps)：依赖地板追到最新——github.com/oagentkit/guardx v0.17.1
+
+| 依赖 | 现地板 | 抬到 |
+|---|---|---|
+| `github.com/oagentkit/guardx` | `v0.17.0` | `v0.17.1` |
+| `github.com/oagentkit/textx` | `v0.7.1` | `v0.7.2` |
+| `github.com/oekit/pkg` | `v0.31.0` | `v0.34.0` |
+## 为什么
+矩阵的**发版时刻地板时效**门禁（`verify_tag_floor --ref HEAD`）要求：各仓 HEAD
+（= 下次发版会发出去的内容）的依赖地板，相对那一刻的依赖最新版本，不能已落后。
+oekit 基座与矩阵模块都在高频发版 ⇒ 地板是**跑步机**，落后一格就会判红。
+## 兼容性实测
+本工具在提交前跑完 `go build` / `go vet` / `go test -race -count=1 ./...`（全绿才提交）
+与 `go mod tidy -diff`（无漂移）⇒ 改动**只影响依赖版本**，零行为差异。
+只改 `go.mod` / `go.sum` ⇒ 不需要 CHANGELOG 条目（版本段由下次发版的 `prewrite` 生成）。
+Co-authored-by: Murphy-Yi <zhangyi@Murphy-YideMac-Mini.local>
+
+- 杂务(deps)：依赖地板追到最新——github.com/oagentkit/guardx v0.17.0
+
+guardx v0.17.0（2026-10-28 发布，含 logredact 载荷裁剪档与 invoke.Outcome 第三格）⇒ 本仓的地板落后 ⇒ 抬上来。
+矩阵的**发版时刻地板时效**门禁（`verify_tag_floor --ref HEAD`，宽口径）要求：**各仓 HEAD**
+（= 下次发版会发出去的内容）的依赖地板，相对那一刻的依赖最新版本，不能已落后。
+兼容性实测：本仓只用这些依赖的少量 API ⇒ go build / go vet / go test -race 全绿，
+**零行为差异**；go 指令未被顶起。
+只改 go.mod / go.sum ⇒ 不需要 CHANGELOG 条目（版本段由下次发版的 `prewrite` 生成）。
+
+- 杂务(deps)：依赖地板追到最新——github.com/oekit/pkg v0.31.0
+
+oekit 基座发了新版本（pkg v0.31.0 / concurrency v0.23.0 / logx v0.8.0）⇒ 本仓的
+依赖地板落后 ⇒ 抬到最新，让**下一次发版**不再带出落后地板（打 tag 时刻的地板
+必须是当时的最新——`verify_tag_floor` / `release.py doctor` 都在查这条）。
+兼容性实测：本仓只用这些基座包的少量 API ⇒ go build / go vet / go test -race
+全绿，**零行为差异**；go 指令未被顶起（本仓的 go 地板不动）。
+
+- 杂务(deps)：依赖地板追平上游本轮新版本——textx v0.7.1
+
+本仓 HEAD 的依赖地板已落后于 textx 的最新版本（`verify_tag_floor.py --org oagentkit --ref HEAD` 判红）。
+本仓一旦发版，就会把落后地板发出去——而 tag 受 protect-tags ruleset 保护、打完不能重打，
+只能靠后续版本补齐。
+本版只抬依赖地板，不改任何行为：
+- github.com/oagentkit/textx v0.6.2 → v0.7.1
+对应 issue matrix-tools#143。
+
+- 杂务(deps)：依赖地板追平上游本轮新版本——github.com/oagentkit/guardx@v0.15.0、github.com/oekit/pkg@v0.28.0
+
+本仓 HEAD 的依赖地板已落后于各依赖的最新版本（`verify_tag_floor.py --org oagentkit --ref HEAD` 判红）。
+本仓一旦发版，就会把落后地板发出去——而 tag 受 protect-tags ruleset 保护、打完不能重打，
+只能靠后续版本补齐。
+本版只抬依赖地板，不改任何行为：
+- github.com/oagentkit/guardx v0.15.0 → v0.15.0
+- github.com/oekit/pkg v0.28.0 → v0.28.0
+对应 issue matrix-tools#143。
+
+
+- 文档(skillkit)：刷正 README 的外部依赖清单 —— 与 go.mod 实测对账
+
+本仓 README 的「外部依赖」清单与**各仓 go.mod 的事实**对不上。
+矩阵的单一数据源 `matrix-tools/modules.json` 也有同样漂移，已在
+[matrix-tools#126](https://github.com/oagentkit/matrix-tools/pull/126) 同步刷正。
+## 现状核实
+```bash
+$ grep -A8 "^require (" skillkit/go.mod | grep -v indirect
+	github.com/Masterminds/semver/v3 v3.3.1
+	github.com/cloudwego/eino v0.9.21
+	github.com/oagentkit/guardx v0.14.0
+	github.com/oagentkit/textx v0.6.2
+	github.com/oekit/pkg v0.22.0
+	gopkg.in/yaml.v3 v3.0.1
+```
+⇒ 第三方直接依赖是 **3 个**（semver/v3、**eino**、yaml.v3），本仓 README 只列了 2 个。
+## 影响
+`eino` 是重量级地板（拉 sonic 等一整套）。README 的「外部依赖地板」小节漏了它 ⇒ 读者按文档判断「这仓只吃 yaml + semver」会**低估**依赖面。
+## 改动
+**只改清单那一行（`- `gopkg.in/yaml.v3`` / `- `github.com/Masterminds/semver/v3`` ⇒ 多一行 `- `github.com/cloudwego/eino``）**，其余段落逐字未动。
+## 验收
+- [x] 清单与 `go.mod` 实测一致
+- [x] 与 `matrix-tools/modules.json` 的登记一致（同期在 matrix-tools#126 刷正）
+- [x] **纯 .md 改动** ⇒ 不需要 CHANGELOG 条目、不打 tag、不发版（无发版步骤）
+关联 oagentkit/matrix-tools#125
+
+- 文档(skillkit)：刷正 README.md 的层位声明——tier 1 → tier 2
+
+## 现状
+本仓 `README.md` 的两处层位声明写的是**层位重定位之前**的旧层位（tier 1），
+而矩阵单一数据源 `matrix-tools/modules.json` 说本仓是 **tier 2（集成层）**。
+层位重定位的依据见 matrix-tools 提交 `6d800c4`「层位 = 依赖地板」——
+tier 2 的定义是「依赖 tier0/tier1 + 重第三方地板」（`modules.json` 的 `tiers` 映射）。
+| 位置 | 改前 | 改后 |
+|---|---|---|
+| `README.md` 第 3 行（定位声明行） | `**tier 1**` | `**tier 2**` |
+| `README.md` 第 17 行（`## 定位` 自述行） | `**tier 1**` | `**tier 2**` |
+- `modules.json`：`skillkit` 的 `tier` = **2**，`tiers["2"]` = 集成层
+- 本仓 `AGENTS.md` 第 5 行：**已是** `> 矩阵分层：**tier 2**（集成层，依赖 tier0/tier1 + 重第三方地板）`
+  ⇒ 改之前，本仓的**两个第一入口互相矛盾**（`AGENTS.md` 说 tier 2、`README.md` 说 tier 1）
+## 影响
+`README.md` 是仓级的第一入口（人读 + agent 读）。它写 tier 1 而数据源是 tier 2 ⇒
+读者按 README 判断依赖方向就会算错，而分层是矩阵的**硬不变量**（tier N 不得依赖 tier > N）。
+## 改动
+**只改层位数字与层名，其余段落逐字不动**：
+- 第 3 行：`**tier 1**` → `**tier 2**`，层名 `（能力层，依赖 tier0）` → `（集成层，依赖 tier0/tier1 + 重第三方地板）`
+- `## 定位`：`**tier 1**` → `**tier 2**`，层名 `能力层` → `集成层`
+层名与整段括号说明对齐到 tier 2 的权威表述后，与本仓 `AGENTS.md`
+及 `llm` / `toolgate` / `tools` / `agent` 四个 tier 2 仓的 README 逐字一致。
+diff 只含层位行，`README.md` 的手写段落逐字未动。
+## 验收
+- [x] `python3 matrix-tools/scripts/verify_repo_tiers.py --root .` ⇒ 本仓 README **红 0**（本地实跑，26 处声明全一致）
+- [x] 层位数字与层名与 `modules.json` 一致，且与本仓 `AGENTS.md` 一致
+- [x] **纯 .md 改动** ⇒ 不需要 CHANGELOG 条目、不打 tag、不发版（无发版步骤）
+关联 oagentkit/matrix-tools#123
+
+- 文档(skillkit)：刷正 AGENTS.md 层位声明——tier 1 → tier 2
+
+AGENTS.md 的层位声明与矩阵单一数据源 modules.json 不一致。
+- 矩阵分层：**tier 1**（能力层，依赖 tier0）→ **tier 2**（集成层，依赖 tier0/tier1 + 重第三方地板）
+- 「本仓是 tier 1，只允许依赖 tier ≤ 1 的仓」→ tier 2
+modules.json 里 skillkit 的 tier = 2（层名「集成层」；层位 t1 → t2 时带 eino 地板，
+skill 的工具决策用 eino tool schema）。层位写错会让人按 tier 1 的口径判依赖方向，
+而分层是矩阵的硬不变量。
+属 matrix-tools#109 的仓级层位漂移；同批修 queue / obs / mcpkit / rag。
+diff 只含层位行，AGENTS.md 的手写段落逐字未动。
+
+
 ## [v0.8.5] — 2026-10-24
 
 - 杂务(deps)：依赖地板跟到矩阵本轮新版本——guardx v0.14.0 / oekit/pkg v0.22.0
