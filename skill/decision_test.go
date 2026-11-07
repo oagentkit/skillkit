@@ -239,12 +239,15 @@ func TestFormatFString(t *testing.T) {
 
 func TestFrontmatterQuotePairTrim(t *testing.T) {
 	// 值整体被引号包裹才剥除；内部合法引号保留
-	name, desc, _, _ := parseFrontmatter("---\nname: \"ocr\"\ndescription: 他说 \"hello\" 结尾\n---\n正文")
+	name, desc, _, _, warn := parseFrontmatter("---\nname: \"ocr\"\ndescription: 他说 \"hello\" 结尾\n---\n正文")
 	if name != "ocr" {
 		t.Fatalf("成对引号应剥除: %q", name)
 	}
 	if desc != `他说 "hello" 结尾` {
 		t.Fatalf("内部合法引号不得被剥: %q", desc)
+	}
+	if warn != nil {
+		t.Fatalf("合法 YAML 不应产生降级信号: %v", warn)
 	}
 }
 
