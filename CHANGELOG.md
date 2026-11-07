@@ -2,6 +2,49 @@
 
 > 本文件由 `matrix-tools/scripts/gen_changelogs.py` 从 git 历史生成，按 tag 切段、取每段内的 conventional commit 渲染。
 
+## [v0.10.0] — 2026-11-07
+
+### 修复(skill)：remove_after 补历法校验 fail-closed；frontmatter 宽松解析改走 yaml.v3 解码标准值形态
+
+## 概要
+一个 PR 修两个 issue：#45（remove_after 历法校验）与 #46（frontmatter 宽松解析器的标准 YAML 值形态）。
+close #45
+close #46
+## #45 remove_after 只验形态不验历法
+**根因**：`skill/library.go` 的 `validateDeprecated` 只用 regex 验 `\d{4}-\d{2}-\d{2}` 形态，「2026-13-45」「2027-02-30」照常通过 Validate；下游 `DeprecationExpired` 对 `time.Parse` 失败恒返回 false——非法日期 = 弃用窗口永不过期（静默无限期弃用窗口），lint/reload 的过期判定永远不触发。
+**修法**：`Validate` 在形态检查之后追加 `time.Parse("2006-01-02")` 真实历法日校验，非法历法日（13 月 45 日、2 月 30 日、非闰年 2 月 29 日等）加载期即报错，fail-closed 不静默忽略；真实闰日（2028-02-29）不受误伤。`DeprecationExpired` 的解析失败分支保留为防御路径并注明上游闸门（Library 加载路径到不了）。
+**测试**（`skill/lifecycle_test.go::TestValidateRemoveAfterCalendar`）：三类非法历法日报「非法日期」、闰年 2 月 29 日放行、非法历法日经 `LoadFromFS` 端到端 fail-fast。
+## #46 FileProvider 宽松解析器把标准 YAML 值形态解析成垃圾
+**根因**：`skill/frontmatter.go` 的 `parseFrontmatter` 是手写逐行 `strings.Cut(":")` + `trimQuoted` 的宽松解析器，只认单行标量——块标量 `description: |` 的值是字面 `"|"`（多行内容静默全丢）、`>-` 折叠同理、引号值带行尾注释则引号+注释整串泄漏进发现清单（`ListSkills` → `Meta` → `ListPrompt`，模型按描述决策 use_skill 的依据被静默摧毁）；且解析「成功」故 OnCorrupt（#36 观测面）不触发，零信号。
+**修法**：围栏切分保持不变（宽松策略保留：无/未闭合围栏仍整份当正文，FileProvider 单文件损坏不阻塞发现），围栏内的值解码改走仓内既有 `gopkg.in/yaml.v3`（与 `ParseRichFrontmatter` 同源，不新增依赖）——新增 `fmLite` 小结构以 `yaml.Node` 承接 name/description/version 三键（其余键仍忽略），块标量（| / > 及缩进体）、单双引号（含转义）、行尾注释、空值、整数 tag 等标准 YAML 形态均正确解出，与严格面同一 YAML 语义；非标量节点返回空串，不产出 `"{}"`/`"[]"` 类垃圾值。块整体非合法 YAML（如未闭合引号、tab 缩进、重复键）时回落旧逐行宽松解析（发现不阻塞），并返回 warn，由 `loadSkill` 经 `OnCorrupt` 上报——降级产出可疑值不再零信号。
+**测试**（`skill/frontmatter_test.go`）：
+- `TestParseFrontmatterStandardYAMLValueForms`：8 类标准值形态表驱动断言（含宽松/严格两面 description 一致性——块标量含缩进 `---` 分隔线的完整口径）；
+- `TestFileProviderListSkillsStandardYAMLFrontmatter`：发现清单端到端，块标量描述完整进 `Meta`，`ListPrompt` 不再渲染字面 `|`；
+- `TestFileProviderFrontmatterFallbackWarn`：非合法 YAML 触发 OnCorrupt 降级警告（带定位与原因），清单不缺项、逐行可解的键仍保留。
+## 契约遵守
+- `LoadVocab` 的 yaml KnownFields 严格解码未动；`ParseRichFrontmatter` 语义未动。
+- 围栏切分（`splitFrontmatter`/`findClosingFence`，#33 唯一事实源）未动。
+- 未动 CHANGELOG.md / go.mod / AGENTS.md / README / matrix-tools；未打 tag。
+## 本地验证
+`gofmt -l .` 为空、`go vet ./...`、`go build ./...`、`go test ./...` 全绿。
+
+- 杂务(deps)：依赖地板追到最新——github.com/oagentkit/guardx v0.20.0
+
+| 依赖 | 现地板 | 抬到 |
+|---|---|---|
+| `github.com/oagentkit/guardx` | `v0.19.0` | `v0.20.0` |
+| `github.com/oagentkit/textx` | `v0.9.0` | `v0.10.0` |
+| `github.com/oekit/pkg` | `v0.34.1` | `v0.36.0` |
+## 为什么
+矩阵的**发版时刻地板时效**门禁（`verify_tag_floor --ref HEAD`）要求：各仓 HEAD
+（= 下次发版会发出去的内容）的依赖地板，相对那一刻的依赖最新版本，不能已落后。
+oekit 基座与矩阵模块都在高频发版 ⇒ 地板是**跑步机**，落后一格就会判红。
+## 兼容性实测
+本工具在提交前跑完 `go build` / `go vet` / `go test -race -count=1 ./...`（全绿才提交）
+与 `go mod tidy -diff`（无漂移）⇒ 改动**只影响依赖版本**，零行为差异。
+只改 `go.mod` / `go.sum` ⇒ 不需要 CHANGELOG 条目（版本段由下次发版的 `prewrite` 生成）。
+
+
 ## [v0.9.0] — 2026-11-06
 
 ### 修复(skill,lineage)：Provider 语义五修——版本约束/错误区分/别名缓存/确定性/时区口径（#35-#39）
