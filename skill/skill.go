@@ -171,7 +171,13 @@ func (p *FileProvider) loadSkill(ref Ref, name string) (*Skill, error) {
 		return nil, fmt.Errorf("skill: 未找到 %s（尝试 %v）", ref.Name, candidates)
 	}
 	// frontmatter 元数据剥离；checksum 对正文计算（canonical 口径，见 Skill.Checksum）
-	fmName, fmDesc, fmVer, body := parseFrontmatter(string(data))
+	fmName, fmDesc, fmVer, body, fmWarn := parseFrontmatter(string(data))
+	if fmWarn != nil && p.OnCorrupt != nil {
+		// 降级警告（oagentkit/skillkit#46）：frontmatter 块非合法 YAML 时逐行
+		// 宽松解析仍产出元数据（发现不阻塞），但「值可能是垃圾」必须可观测——
+		// OnCorrupt 亦承载降级信号（本仓不引日志依赖，tier 纪律），宿主接告警面。
+		p.OnCorrupt(ref.Name, fmWarn)
+	}
 	// Version 请求约束兑现（oagentkit/skillkit#37）：请求版本非空且与
 	// frontmatter 声明不符即报错——此前只当缓存键，约束静默裸奔
 	if ref.Version != "" && fmVer != ref.Version {

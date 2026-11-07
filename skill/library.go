@@ -78,6 +78,8 @@ func (m LibMeta) DeprecationExpired(now time.Time) bool {
 	}
 	d, err := time.ParseInLocation("2006-01-02", m.Deprecated.RemoveAfter, time.UTC)
 	if err != nil {
+		// 解析失败仅防御性返回 false：历法合法性已由 Validate 在加载期
+		// fail-closed 拦截（oagentkit/skillkit#45），Library 路径到不了这里。
 		return false
 	}
 	return now.After(d.Add(24*time.Hour - time.Nanosecond))
@@ -119,13 +121,20 @@ func (m LibMeta) Validate() error {
 	return nil
 }
 
-// validateDeprecated 弃用元数据校验：必须有 remove_after 且为 YYYY-MM-DD。
+// validateDeprecated 弃用元数据校验：必须有 remove_after 且为 YYYY-MM-DD 的
+// 真实历法日。
 func validateDeprecated(d *Deprecated) error {
 	if d == nil || d.RemoveAfter == "" {
 		return fmt.Errorf("skill: maturity=deprecated 必须填写 deprecated.remove_after（YYYY-MM-DD）")
 	}
 	if !dateRe.MatchString(d.RemoveAfter) {
 		return fmt.Errorf("skill: deprecated.remove_after 非法 %q（YYYY-MM-DD）", d.RemoveAfter)
+	}
+	// 历法校验（oagentkit/skillkit#45）：regex 只验形态，「2026-13-45」「2027-02-30」
+	// 同样放行；而 DeprecationExpired 对 time.Parse 失败恒 false——非法日期=
+	// 弃用窗口永不过期（静默无限期）。fail-closed：历法合法性前置到加载期 Validate。
+	if _, err := time.Parse("2006-01-02", d.RemoveAfter); err != nil {
+		return fmt.Errorf("skill: deprecated.remove_after 非法日期 %q（YYYY-MM-DD，须为真实历法日）", d.RemoveAfter)
 	}
 	return nil
 }

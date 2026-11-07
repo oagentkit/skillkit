@@ -54,17 +54,51 @@ func splitFrontmatter(trimmed string) (block, body string, ok bool) {
 	return rest[:blockEnd], strings.TrimSpace(rest[bodyStart:]), true
 }
 
+// fmLite 宽松 frontmatter 的 yaml 承接结构：只取 name/description/version 三键，
+// 其余键忽略（与旧逐行解析同一宽松语义）。字段以 yaml.Node 承接——标量的
+// 值形态（块标量 | / >、单双引号含转义、行尾注释、空值、整数等非字符串 tag）
+// 由 yaml.v3 解析层给出最终内容，与 ParseRichFrontmatter 同一 YAML 语义。
+type fmLite struct {
+	Name        yaml.Node `yaml:"name"`
+	Description yaml.Node `yaml:"description"`
+	Version     yaml.Node `yaml:"version"`
+}
+
+// nodeScalarText 提取标量节点文本：!!null 与非标量节点（映射/序列——宽松面
+// 无此形态的合法输入）返回空串，不产出 "{}"/"[]" 类垃圾值。
+func nodeScalarText(n *yaml.Node) string {
+	if n.Kind != yaml.ScalarNode || n.Tag == "!!null" {
+		return ""
+	}
+	return n.Value
+}
+
 // parseFrontmatter 解析 SKILL.md 的 YAML frontmatter（Agent Skills 开放标准的
-// 最小子集：--- 围栏内的 name/description/version 行）。零依赖：不引 yaml 解析器，
-// 不认识的键忽略——skill 正文才是消费主体，元数据只服务发现与决策。
+// 最小子集：--- 围栏内的 name/description/version 行），不认识的键忽略——
+// skill 正文才是消费主体，元数据只服务发现与决策。
 // 宽松策略：无/未闭合围栏一律整份当正文（FileProvider 单文件损坏不阻塞发现）。
-func parseFrontmatter(content string) (name, desc, ver, body string) {
+//
+// 围栏内的值解码走 yaml.v3（oagentkit/skillkit#46）：此前手写逐行 Cut 只认
+// 单行标量——`description: |` 的值是字面 "|"（块标量多行内容静默全丢）、
+// 引号值带行尾注释则引号+注释整串泄漏进发现清单，且解析「成功」零信号。
+// 块整体不是合法 YAML 时回落旧逐行宽松解析（宽松策略保留），并返回非 nil
+// warn 交调用方观测——降级产出垃圾值的风险不再静默。
+func parseFrontmatter(content string) (name, desc, ver, body string, warn error) {
 	trimmed := trimDocHead(content)
 	block, body, ok := splitFrontmatter(trimmed)
 	if !ok {
-		return "", "", "", content
+		return "", "", "", content, nil // 宽松策略既定语义（围栏不成立整份当正文），非降级
 	}
 
+	var fm fmLite
+	if err := yaml.Unmarshal([]byte(block), &fm); err != nil {
+		warn = fmt.Errorf("skill: frontmatter 块非合法 YAML，降级逐行宽松解析: %w", err)
+	} else {
+		return nodeScalarText(&fm.Name), nodeScalarText(&fm.Description), nodeScalarText(&fm.Version), body, nil
+	}
+
+	// 降级回落：旧逐行宽松解析（只认单行标量；块标量等形态此时已无解，
+	// warn 是其产出垃圾值的唯一信号面）。
 	for _, line := range strings.Split(block, "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" || strings.HasPrefix(line, "#") {
@@ -84,7 +118,7 @@ func parseFrontmatter(content string) (name, desc, ver, body string) {
 			ver = val
 		}
 	}
-	return name, desc, ver, body
+	return name, desc, ver, body, warn
 }
 
 // trimQuoted 仅当值整体被成对引号包裹时剥除——值内部以引号结尾的合法内容

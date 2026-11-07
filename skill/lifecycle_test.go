@@ -41,6 +41,29 @@ func TestLoadValidateFailFast(t *testing.T) {
 	}
 }
 
+// TestValidateRemoveAfterCalendar 历法校验回归（skillkit#45）：remove_after 此前
+// 只验 \d{4}-\d{2}-\d{2} 形态——「2026-13-45」「2027-02-29（非闰年）」通过 Validate，
+// 而 DeprecationExpired 对解析失败恒 false：非法日期=弃用窗口永不过期（静默
+// 无限期）。现 Validate 用 time.Parse 验真实历法日，加载期 fail-closed。
+func TestValidateRemoveAfterCalendar(t *testing.T) {
+	bad := []string{"2026-13-45", "2027-02-30", "2027-02-29"} // 13 月 45 日 / 2 月 30 日 / 非闰年 2 月 29 日
+	for _, d := range bad {
+		err := validateDeprecated(&Deprecated{RemoveAfter: d})
+		if err == nil || !strings.Contains(err.Error(), "非法日期") {
+			t.Fatalf("%s 应报非法历法日: %v", d, err)
+		}
+	}
+	// 真实历法日不受误伤：闰年 2 月 29 日合法。
+	if err := validateDeprecated(&Deprecated{RemoveAfter: "2028-02-29"}); err != nil {
+		t.Fatalf("闰年 2 月 29 日不应误伤: %v", err)
+	}
+	// 加载期端到端：非法历法日整库 fail-fast。
+	fsys := fstest.MapFS{"p/skills/s1/SKILL.md": mf("---\nname: x\nmaturity: deprecated\ndeprecated:\n  remove_after: 2026-13-45\n---\n正文")}
+	if _, err := LoadFromFS(fsys); err == nil {
+		t.Fatal("非法历法 remove_after 应在加载期拦截")
+	}
+}
+
 // TestLoadContractDefaults 缺省值（_shared=frozen / 包内=experimental / 0.0.0 / static）
 // 与契约字段（requires_mcp.tools / provides）解析。
 func TestLoadContractDefaults(t *testing.T) {
