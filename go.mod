@@ -7,7 +7,7 @@ require (
 	github.com/cloudwego/eino v0.9.21
 	github.com/oagentkit/guardx v0.20.0
 	github.com/oagentkit/textx v0.10.0
-	github.com/oekit/pkg v0.37.0
+	github.com/oekit/pkg v0.37.1
 	gopkg.in/yaml.v3 v3.0.1
 )
 
