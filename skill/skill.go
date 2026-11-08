@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/oekit/pkg/encoding"
 )
@@ -68,6 +69,13 @@ type Provider interface {
 }
 
 // FileProvider file 来源实现：root/<name>/SKILL.md 或 root/<name>.md。
+//
+// 缓存与新鲜度（oagentkit/skillkit#56）：缓存条目带源文件 stat 指纹
+// （mtime+size），Resolve 命中前先复验，盘上编辑（含宿主经 RewriteMode/
+// RewriteBody 改写后写回的编辑流）下一次 Resolve 即可见——每次命中付出一次
+// os.Stat 的代价，换取「编辑-重载」循环无进程级陈旧。粗粒度 FS 上同 size 且
+// 同 mtime 的改写指纹抓不住，可经 Invalidate 显式强制重读。复验发现文件消失
+// 按陈旧处理走重读——删除以「未找到」错误如实上抛，不再被旧缓存掩护。
 type FileProvider struct {
 	// OnCorrupt 单个 skill 解析失败回调（nil 安全，oagentkit/skillkit#36）：
 	// ListSkills 对损坏条目 continue 跳过（发现不阻塞），损坏经此观测——
@@ -78,13 +86,23 @@ type FileProvider struct {
 	Root string
 
 	mu      sync.RWMutex
-	cache   map[string]*Skill // key = name@version
-	aliases map[string]string // 展示名(frontmatter name) → 规范引用名（懒扫描）
+	cache   map[string]*fileCacheEntry // key = name@version（与 cacheKey 同键空间）
+	aliases map[string]string          // 展示名(frontmatter name) → 规范引用名（懒扫描）
+}
+
+// fileCacheEntry 缓存条目：解析产物 + 源文件指纹。指纹两轴缺一不可——粗粒度
+// FS 上 size 抓不住等长替换、mtime 抓不住同窗双写。条目入库后不可变（并发
+// 持有只读）；内容变更即换新条目，不做原地改写。
+type fileCacheEntry struct {
+	skill *Skill
+	path  string
+	mtime time.Time
+	size  int64
 }
 
 // NewFileProvider 创建文件来源的内容解析器。
 func NewFileProvider(root string) *FileProvider {
-	return &FileProvider{Root: root, cache: map[string]*Skill{}}
+	return &FileProvider{Root: root, cache: map[string]*fileCacheEntry{}}
 }
 
 func cacheKey(ref Ref) string {
@@ -94,7 +112,25 @@ func cacheKey(ref Ref) string {
 	return ref.Name
 }
 
-// Resolve 解析引用，返回内容（带缓存）。磁盘读取前检查 ctx 取消。
+// Invalidate 显式失效缓存：清掉 name 的全部缓存键（含 name@version 变体，
+// 归一化口径同 safeSkillName）。供宿主在 stat 指纹抓不住的写路径后调用
+// （粗粒度 FS 上的等长同 mtime 改写、NFS 等不可靠 mtime 来源），也可用于
+// 写后强制一致。未知名字安全（无操作）。
+func (p *FileProvider) Invalidate(name string) {
+	name = strings.TrimSpace(name)
+	clean := filepath.Clean("/" + name)[1:]
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for key := range p.cache {
+		if key == name || key == clean ||
+			strings.HasPrefix(key, name+"@") || strings.HasPrefix(key, clean+"@") {
+			delete(p.cache, key)
+		}
+	}
+}
+
+// Resolve 解析引用，返回内容（带缓存，命中前 stat 指纹复验——见 FileProvider
+// 新鲜度契约）。磁盘读取前检查 ctx 取消。
 func (p *FileProvider) Resolve(ctx context.Context, ref Ref) (*Skill, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, fmt.Errorf("skill: %w", err)
@@ -110,22 +146,47 @@ func (p *FileProvider) Resolve(ctx context.Context, ref Ref) (*Skill, error) {
 	p.mu.RLock()
 	cached := p.cache[key]
 	p.mu.RUnlock()
-	if cached != nil {
-		return cached, nil
+	if cached != nil && p.fresh(cached) {
+		return cached.skill, nil
 	}
 
 	name, err := safeSkillName(ref.Name)
 	if err != nil {
 		return nil, err
 	}
-	s, err := p.loadSkill(ref, name)
+	s, path, err := p.loadSkill(ref, name)
 	if err != nil {
+		// 陈旧条目的重读失败（如源文件已被删）：清掉旧条目再如实上抛，
+		// 不留半失效状态
+		p.mu.Lock()
+		delete(p.cache, key)
+		p.mu.Unlock()
 		return nil, err
 	}
+	// 指纹取加载后立刻 stat 的快照（读改窗内再被编辑的极端形态由下一次
+	// 复验兜住——指纹只承诺「此后可见」，不承诺读改原子性）
+	fi, err := os.Stat(path)
+	if err != nil {
+		return nil, fmt.Errorf("skill: 读取 %s 失败: %w", ref.Name, err)
+	}
 	p.mu.Lock()
-	p.cache[key] = s
+	p.cache[key] = &fileCacheEntry{skill: s, path: path, mtime: fi.ModTime(), size: fi.Size()}
 	p.mu.Unlock()
 	return s, nil
+}
+
+// fresh 缓存条目新鲜度：对源文件重新 stat，mtime+size 双轴一致才算新鲜。
+// stat 在锁外执行（只读不可变字段 Root 与条目自身，不触碰共享 map）；
+// stat 失败（文件被删等）按陈旧处理——具体错误交由重读路径如实上抛。
+// 并发取舍：不做单飞，两个 goroutine 同看到一个陈旧键会各自重读一遍
+// （重复 I/O、后写覆盖，读到的都是同一份盘上内容）——Resolve 不引入
+// 全局串行点，锁内只做 map 读写。
+func (p *FileProvider) fresh(e *fileCacheEntry) bool {
+	fi, err := os.Stat(e.path)
+	if err != nil {
+		return false
+	}
+	return fi.ModTime().Equal(e.mtime) && fi.Size() == e.size
 }
 
 // safeSkillName 规范化引用名并拒绝路径穿越（前缀 / 使 .. 无法越出 root）。
@@ -144,17 +205,20 @@ func safeSkillName(refName string) (string, error) {
 }
 
 // loadSkill 读盘并剥 frontmatter 组装 Skill（checksum 对正文计算）。
-func (p *FileProvider) loadSkill(ref Ref, name string) (*Skill, error) {
+// 返回实际命中的候选路径——缓存指纹（mtime+size）指向它（#56）。
+func (p *FileProvider) loadSkill(ref Ref, name string) (*Skill, string, error) {
 	candidates := []string{
 		filepath.Join(p.Root, name, "SKILL.md"),
 		filepath.Join(p.Root, name+".md"),
 	}
 	var data []byte
+	var loaded string
 	var readErr error
 	for _, c := range candidates {
 		b, err := os.ReadFile(c)
 		if err == nil {
 			data = b
+			loaded = c
 			break
 		}
 		if !errors.Is(err, fs.ErrNotExist) {
@@ -166,9 +230,9 @@ func (p *FileProvider) loadSkill(ref Ref, name string) (*Skill, error) {
 	}
 	if data == nil {
 		if readErr != nil {
-			return nil, fmt.Errorf("skill: 读取 %s 失败: %w", ref.Name, readErr)
+			return nil, "", fmt.Errorf("skill: 读取 %s 失败: %w", ref.Name, readErr)
 		}
-		return nil, fmt.Errorf("skill: 未找到 %s（尝试 %v）", ref.Name, candidates)
+		return nil, "", fmt.Errorf("skill: 未找到 %s（尝试 %v）", ref.Name, candidates)
 	}
 	// frontmatter 元数据剥离；checksum 对正文计算（canonical 口径，见 Skill.Checksum）
 	fmName, fmDesc, fmVer, body, fmWarn := parseFrontmatter(string(data))
@@ -181,7 +245,7 @@ func (p *FileProvider) loadSkill(ref Ref, name string) (*Skill, error) {
 	// Version 请求约束兑现（oagentkit/skillkit#37）：请求版本非空且与
 	// frontmatter 声明不符即报错——此前只当缓存键，约束静默裸奔
 	if ref.Version != "" && fmVer != ref.Version {
-		return nil, fmt.Errorf("skill: %s 版本不符：请求 %s，库内 %s", ref.Name, ref.Version, fmVer)
+		return nil, "", fmt.Errorf("skill: %s 版本不符：请求 %s，库内 %s", ref.Name, ref.Version, fmVer)
 	}
 	displayName := ref.Name
 	if fmName != "" {
@@ -193,7 +257,7 @@ func (p *FileProvider) loadSkill(ref Ref, name string) (*Skill, error) {
 		Description: fmDesc,
 		Content:     body,
 		Checksum:    contentChecksum(body),
-	}, nil
+	}, loaded, nil
 }
 
 // ---------- 发现与决策使用（渐进披露） ----------
