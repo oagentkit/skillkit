@@ -45,8 +45,9 @@ type Deprecated struct {
 
 // LibMeta 技能完整元数据（渐进披露清单 + 生命周期管理）。
 // JSON 标签即对外 API 契约（名册/血缘面），变更须同步消费方。
-// yaml 标签即 SKILL.md frontmatter 契约（omitempty 与 marshalFrontmatter
-// 「缺省字段不写回防膨胀」约定一体），解析/序列化均以本结构体为唯一事实源。
+// yaml 标签即 SKILL.md frontmatter 契约的**已知字段子集**（ParseRichFrontmatter
+// 的承接结构）：schema 外的键由 RewriteMode 的 node 手术路径原样保留
+// （oagentkit/skillkit#57），不经本结构体——结构体 round-trip 会删未知键。
 type LibMeta struct {
 	Name        string   `yaml:"name,omitempty" json:"name"`
 	Title       string   `yaml:"-" json:"-"` // frontmatter name（展示名）；目录名规范

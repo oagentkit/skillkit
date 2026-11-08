@@ -5,7 +5,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 )
 
 func TestFileProviderResolve(t *testing.T) {
@@ -185,4 +187,125 @@ func TestListSkillsOnCorrupt(t *testing.T) {
 	if len(corrupted) != 1 || corrupted[0] != "bad" {
 		t.Fatalf("损坏条目应经 OnCorrupt 留痕: %v", corrupted)
 	}
+}
+
+// TestFileProviderResolveObservesDiskEdits skillkit#56 回归：Resolve 缓存此前
+// 永久 sticky（无 TTL、无 stat 复验、无失效 API）——盘上编辑（含宿主经
+// RewriteMode/RewriteBody 改写后写回的编辑流）永不生效，陈旧 Checksum 还会
+// 毒化比对型守卫。现缓存条目带 mtime+size 指纹，命中前先 stat 复验，变了即重读。
+func TestFileProviderResolveObservesDiskEdits(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "demo", "SKILL.md")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	v1 := "---\nname: demo\ndescription: 第一版\n---\n\nbody-v1\n"
+	if err := os.WriteFile(path, []byte(v1), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	fp := NewFileProvider(dir)
+	ctx := context.Background()
+	s1, err := fp.Resolve(ctx, Ref{Name: "demo"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s1.Content != "body-v1" {
+		t.Fatalf("首读内容不符: %q", s1.Content)
+	}
+
+	// 等长正文替换（RewriteBody 编辑流的典型终态）：size 不变、只动 mtime——
+	// 指纹必须双轴。显式 Chtimes 前移，免受文件系统 mtime 粒度影响（不赌 FS）。
+	v2 := strings.Replace(v1, "body-v1", "body-v2", 1)
+	if err := os.WriteFile(path, []byte(v2), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	future := time.Now().Add(2 * time.Second)
+	if err := os.Chtimes(path, future, future); err != nil {
+		t.Fatal(err)
+	}
+	s2, err := fp.Resolve(ctx, Ref{Name: "demo"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s2.Content != "body-v2" {
+		t.Fatalf("盘上编辑后 Resolve 仍回旧缓存（skillkit#56）: %q", s2.Content)
+	}
+	if s2.Checksum == s1.Checksum {
+		t.Fatalf("内容变更后 checksum 必须随动: %s", s2.Checksum)
+	}
+
+	// 复验不误伤缓存语义：内容未变时同一指针命中
+	s3, err := fp.Resolve(ctx, Ref{Name: "demo"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s3 != s2 {
+		t.Fatal("未变化的重复 Resolve 应命中缓存（同一指针）")
+	}
+}
+
+// TestFileProviderInvalidate 显式失效 API：粗粒度 FS 上同 size 且同 mtime 的
+// 改写 stat 抓不住——宿主写回后可 Invalidate 强制下一次 Resolve 重读。
+func TestFileProviderInvalidate(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "demo.md")
+	v1 := "---\nname: demo\n---\n\nbody-v1\n"
+	if err := os.WriteFile(path, []byte(v1), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	fp := NewFileProvider(dir)
+	ctx := context.Background()
+	if _, err := fp.Resolve(ctx, Ref{Name: "demo"}); err != nil {
+		t.Fatal(err)
+	}
+
+	// 等长改写 + mtime 回拨到原值：stat 复验视为未变（粗粒度 FS 的真实形态）
+	fi, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v2 := strings.Replace(v1, "body-v1", "body-v2", 1)
+	if err := os.WriteFile(path, []byte(v2), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(path, fi.ModTime(), fi.ModTime()); err != nil {
+		t.Fatal(err)
+	}
+
+	fp.Invalidate("demo")
+	s, err := fp.Resolve(ctx, Ref{Name: "demo"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Content != "body-v2" {
+		t.Fatalf("Invalidate 后 Resolve 应重读盘上内容: %q", s.Content)
+	}
+}
+
+// TestFileProviderConcurrentResolveInvalidate -race 回归：并发 Resolve 与
+// Invalidate 混跑无数据竞争（指纹 stat 在锁外、缓存读写均在锁内收敛）。
+func TestFileProviderConcurrentResolveInvalidate(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "demo.md"), []byte("---\nname: demo\n---\n\n正文"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	fp := NewFileProvider(dir)
+	var wg sync.WaitGroup
+	for i := 0; i < 16; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			ctx := context.Background()
+			for j := 0; j < 32; j++ {
+				if _, err := fp.Resolve(ctx, Ref{Name: "demo"}); err != nil {
+					t.Error(err)
+					return
+				}
+				if j%8 == 0 {
+					fp.Invalidate("demo")
+				}
+			}
+		}()
+	}
+	wg.Wait()
 }

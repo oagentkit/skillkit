@@ -144,6 +144,65 @@ func TestRewriteMode(t *testing.T) {
 	}
 }
 
+// TestRewriteModePreservesUnknownKeys skillkit#57 回归：frontmatter 块按
+// yaml.Node 局部手术（只动 mode 标量）后，LibMeta schema 外的键——SKILL.md
+// 开放标准允许的 license/owner 及任意工具注解——连同键序与注释原样存活。
+// 此前的 LibMeta 结构体 round-trip 会把它们静默删除（yaml.Unmarshal 忽略
+// 未知键，re-marshal 只写已知字段），与文档「其余元数据字段原样保留」相悖。
+func TestRewriteModePreservesUnknownKeys(t *testing.T) {
+	src := strings.Join([]string{
+		"---",
+		"name: demo",
+		"description: 演示",
+		"mode: static",
+		"# 保留注释行",
+		"license: mit", // schema 外键（开放标准允许）
+		"owner: platform-team",
+		"x-tool-annotation: {a: 1}",
+		"---",
+		"",
+		"Body.",
+	}, "\n")
+	out, err := RewriteMode(src, ModeOnDemand)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"license: mit", "owner: platform-team", "x-tool-annotation", "# 保留注释行", "a: 1"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("未知键 %q 被静默丢弃（skillkit#57）:\n%s", want, out)
+		}
+	}
+	if !strings.Contains(out, "mode: on_demand") {
+		t.Fatalf("mode 未切换:\n%s", out)
+	}
+	// round-trip 幂等：再次切换未知键继续存活
+	out2, err := RewriteMode(out, ModeStatic)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out2, "license: mit") {
+		t.Fatalf("二次切换仍须保留未知键:\n%s", out2)
+	}
+}
+
+// TestRewriteModeToleratesDocHead 文档头判定与解析器同口径（skillkit#57 次要项）：
+// 解析入口 trimDocHead 剥 BOM 与前导空白——能被 ParseRichFrontmatter 正常解析
+// 的文档（BOM/前导空行）不应被 RewriteMode 以「无 frontmatter」拒绝。
+func TestRewriteModeToleratesDocHead(t *testing.T) {
+	for i, src := range []string{
+		"\ufeff---\nmode: static\n---\n正文", // Windows 编辑器 BOM
+		"\n\t---\nmode: static\n---\n正文",   // 前导空白
+	} {
+		out, err := RewriteMode(src, ModeOnDemand)
+		if err != nil {
+			t.Fatalf("夹具 %d：解析器可读的文档头不应被拒: %v", i, err)
+		}
+		if !strings.Contains(out, "mode: on_demand") {
+			t.Fatalf("夹具 %d：mode 未切换: %q", i, out)
+		}
+	}
+}
+
 // TestRewriteModeNoTitle 无 frontmatter name 的技能写回不得引入伪 name。
 func TestRewriteModeNoTitle(t *testing.T) {
 	src := "---\nmode: static\n---\n正文"
