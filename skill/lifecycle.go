@@ -102,7 +102,14 @@ func RewriteBody(content, body string) (string, error) {
 	if !closed {
 		return "", fmt.Errorf("skill: frontmatter 未闭合，拒绝编辑")
 	}
-	// kept = 起始围栏到闭合围栏行（含）：blockEnd 指向闭合 "---" 前的 \n
-	kept := content[:3+blockEnd] + "\n---"
+	// kept = 起始围栏到闭合围栏行（含）：blockEnd 指向闭合 "---" 前的 \n。
+	// 切原串必须用 rest 的**真实头偏移**（skillkit#66）：起始围栏 CRLF 时
+	// 上面的 TrimPrefix 已吃掉 \r，rest 坐标系相对 content 左移 1 字节——
+	// 按写死的 3 切，混排 EOL（CRLF 起始围栏 + LF 内行，Windows 编辑器
+	// 保存的单文件常态形态）下切点落在真实围栏 \n 的前一个字节，恰好裁掉
+	// frontmatter 末行内容的最后一个字节（version: 1.2.3 → 1.2.，回读解析
+	// 成功零报错的静默递进腐蚀；全 CRLF 文档碰巧丢的是 \r 才漏网）。
+	head := len(content) - len(rest) // 3（LF 起始围栏）或 4（CRLF）
+	kept := content[:head+blockEnd] + "\n---"
 	return kept + "\n\n" + strings.TrimRight(body, "\n") + "\n", nil
 }

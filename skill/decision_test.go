@@ -352,6 +352,58 @@ func TestAsSkillToolContentCap(t *testing.T) {
 	}
 }
 
+// TestContentCapChecksumBindsReturnedContent 截断后自证锚点回归（skillkit#67）：
+// 此前 capContent 只截 Content、Checksum 仍是 Provider 全文口径——守卫按设计
+// 做 sha256(content)[:16] == Checksum 比对，凡超上限的合法截断必报假阳性
+// （被误判成内容漂移/篡改）。断言：截断与否，Checksum 都必须与**实际返回的
+// Content** 一致；截断形态的 Checksum 同时必须异于全文口径（证明真的重算了，
+// 不是恰好一致）。
+func TestContentCapChecksumBindsReturnedContent(t *testing.T) {
+	dir := t.TempDir()
+	full := "# 大技能\n\n" + strings.Repeat("B", 5000)
+	if err := os.WriteFile(filepath.Join(dir, "big.md"), []byte(full), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	p := NewFileProvider(dir)
+	sFull, err := p.Resolve(context.Background(), Ref{Name: "big"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	bt, err := AsSkillTool(p, []string{"big"}, WithContentCap(1000))
+	if err != nil {
+		t.Fatal(err)
+	}
+	it := bt.(tool.InvokableTool)
+	raw, err := it.InvokableRun(context.Background(), `{"name":"big"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out useSkillOut
+	if err := json.Unmarshal([]byte(raw), &out); err != nil {
+		t.Fatalf("出参非 JSON: %v", err)
+	}
+	if !strings.Contains(out.Content, "已截断") {
+		t.Fatal("前置条件：全文应被截断")
+	}
+	if out.Checksum != contentChecksum(out.Content) {
+		t.Fatalf("截断后 Checksum 应绑定实际返回的 Content: checksum=%q, sha256(content)[:16]=%q",
+			out.Checksum, contentChecksum(out.Content))
+	}
+	if out.Checksum == sFull.Checksum {
+		t.Fatal("截断产物的 Checksum 应重算（不得仍为 Provider 全文口径）")
+	}
+
+	// 未截断路径不受影响：Checksum 与 Provider 口径一致。
+	bt2, _ := AsSkillTool(p, []string{"big"}, WithContentCap(0))
+	raw2, _ := bt2.(tool.InvokableTool).InvokableRun(context.Background(), `{"name":"big"}`)
+	var out2 useSkillOut
+	_ = json.Unmarshal([]byte(raw2), &out2)
+	if out2.Checksum != sFull.Checksum || out2.Checksum != contentChecksum(out2.Content) {
+		t.Fatalf("未截断时 Checksum 应保持 Provider 口径且与 Content 一致: %q", out2.Checksum)
+	}
+}
+
 // TestRenderListBudgetHonored 回归（第六轮审计）：降级截断的头尾计入预算
 // （重组后不得超 budget），多字节技能名不被切碎（rune 对齐 + 分隔符回退）。
 func TestRenderListBudgetHonored(t *testing.T) {

@@ -230,6 +230,50 @@ func TestRewriteBody(t *testing.T) {
 	}
 }
 
+// TestRewriteBodyMixedEOL 混排 EOL 回归（skillkit#66）：CRLF 起始围栏 + LF
+// 内行（Windows 编辑器保存的单文件常态形态）此前坐标错位一字节——TrimPrefix
+// 吃掉起始围栏 \r 后 rest 坐标系左移，kept 却按无 \r 的 content 坐标系切，
+// 每次编辑递进裁掉 frontmatter 末行内容的最后一个字节（version: 1.2.3 →
+// 1.2.），回读解析成功零报错。断言口径：frontmatter 围栏块逐字节保留、
+// 回读解析元数据无损。全 CRLF 形态此前「碰巧不损」（丢的恰是 \r，表现为
+// 换行归一）——正是它漏网的原因，一并钉住。
+func TestRewriteBodyMixedEOL(t *testing.T) {
+	cases := []struct {
+		name string
+		src  string
+		want string
+	}{
+		{"CRLF 起始围栏+LF 内行", "---\r\nname: probe-skill\nversion: 1.2.3\n---\n\nBODY\n",
+			"---\r\nname: probe-skill\nversion: 1.2.3\n---\n\nNEW\n"},
+		{"全 LF 基线", "---\nname: probe-skill\nversion: 1.2.3\n---\n\nBODY\n",
+			"---\nname: probe-skill\nversion: 1.2.3\n---\n\nNEW\n"},
+		{"全 CRLF", "---\r\nname: probe-skill\r\nversion: 1.2.3\r\n---\r\n\r\nBODY\r\n",
+			"---\r\nname: probe-skill\r\nversion: 1.2.3\r\n---\n\nNEW\n"},
+		{"LF 起始围栏+CRLF 内行", "---\nname: probe-skill\r\nversion: 1.2.3\r\n---\n\nBODY\n",
+			"---\nname: probe-skill\r\nversion: 1.2.3\r\n---\n\nNEW\n"},
+	}
+	for _, tc := range cases {
+		out, err := RewriteBody(tc.src, "NEW")
+		if err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		if out != tc.want {
+			t.Fatalf("%s:\ngot  %q\nwant %q", tc.name, out, tc.want)
+		}
+		// 回读解析零损：末行值不被截断（腐蚀形态回读是成功的，单靠不报错抓不住）。
+		meta, body, err := ParseRichFrontmatter("probe-skill", out)
+		if err != nil {
+			t.Fatalf("%s: 回读解析失败: %v", tc.name, err)
+		}
+		if meta.Title != "probe-skill" || meta.Version != "1.2.3" {
+			t.Fatalf("%s: 元数据被腐蚀: title=%q version=%q", tc.name, meta.Title, meta.Version)
+		}
+		if body != "NEW" {
+			t.Fatalf("%s: 正文应为 NEW, got %q", tc.name, body)
+		}
+	}
+}
+
 // TestVersionInRange 区间求解：空区间恒真；空格=AND；非法区间/版本报错。
 func TestVersionInRange(t *testing.T) {
 	cases := []struct {
