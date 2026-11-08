@@ -72,7 +72,7 @@ type useSkillOut struct {
 	Name        string `json:"name,omitempty"`      // 解析后规范引用名（allowed 校验与守卫比对的基准）
 	Requested   string `json:"requested,omitempty"` // 模型原始入参（别名命中时与 Name 不同）
 	Version     string `json:"version,omitempty"`   // frontmatter version（Provider 未提供时为空）
-	Checksum    string `json:"checksum,omitempty"`  // 内容校验和（sha256 hex，Provider 口径）
+	Checksum    string `json:"checksum,omitempty"`  // 内容校验和（sha256 hex 前 16 位）——绑定实际返回的 Content；截断时按截断产物重算（skillkit#67），不再与 Provider 全文口径一致
 	Content     string `json:"content,omitempty"`
 	Description string `json:"description,omitempty"`
 	Error       string `json:"error,omitempty"`
@@ -149,7 +149,14 @@ func WithContentCap(n int) ToolOption {
 	return func(c *skillToolCfg) { c.contentCap = n }
 }
 
-// capContent 就地施加全文上限（截断 + 尾部声明；≤0 = 不限）。
+// capContent 就地施加全文上限（截断 + 尾部声明；≤0 = 不限）。截断发生时
+// Checksum 对**截断产物**重算（skillkit#67）：自证锚点的契约是「绑定实际
+// 返回的内容」（Skill.Checksum 文档承诺），此前只截 Content、Checksum 仍是
+// 全文的——守卫按设计做 sha256(content)[:16] == Checksum 比对，凡超上限的
+// 合法截断必报假阳性（每次被误判成内容漂移/篡改），防护面要么全量误报、
+// 要么被宿主整只关掉。重算用与两个 Provider 同一 canonical 单源
+// contentChecksum，锚点在截断形态下依然可校验；未截断路径不受影响
+// （Checksum 本就与 Content 一致）。
 func capContent(out *useSkillOut, capBytes int) {
 	if capBytes <= 0 {
 		return
@@ -162,6 +169,7 @@ func capContent(out *useSkillOut, capBytes int) {
 	}
 	out.Content = cut +
 		"\n\n[系统提示] 技能全文超过上限已截断；以上为前缀内容，请基于已有信息继续，必要时申请平台侧拆分技能。"
+	out.Checksum = contentChecksum(out.Content)
 }
 
 // ListPrompt 渲染可用 skill 清单（注入提示词的决策依据，不含正文）。
