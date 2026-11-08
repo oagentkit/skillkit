@@ -2,6 +2,29 @@
 
 > 本文件由 `matrix-tools/scripts/gen_changelogs.py` 从 git 历史生成，按 tag 切段、取每段内的 conventional commit 渲染。
 
+## [v0.10.2] — 2026-11-08
+
+### 修复(skill)：RewriteMode 未知 frontmatter 键原样保留 + FileProvider 缓存失效路径（#57 #56）
+
+skillkit#57 RewriteMode 曾用 LibMeta 结构体 round-trip 切换 mode——
+yaml.Unmarshal 忽略 schema 外键 + re-marshal 只写已知字段，SKILL.md
+开放标准允许的 license/owner 等键被静默删除，与文档「其余元数据字段
+原样保留」相悖。改为 yaml.Node 局部手术：只对 mode 标量原位改值（无则
+追加），其余键连同键序/注释原样存活；文档头判定改用 trimDocHead 与解析
+器同口径（BOM/前导空白不再被「无 frontmatter」误拒）。
+skillkit#56 FileProvider.Resolve 缓存永久 sticky——盘上编辑（含宿主经
+RewriteMode/RewriteBody 写回的编辑流）永不生效，陈旧 Checksum 毒化守卫。
+缓存条目改为携带源文件 mtime+size 指纹，命中前锁外 stat 复验（一次 stat
+换编辑-重载循环无进程级陈旧；粗粒度 FS 的等长同 mtime 改写由新增
+Invalidate(name) 显式失效兜底）；条目不可变、并发无单飞——Resolve 不引入
+全局串行点。
+
+- 杂务(deps)：依赖地板追到最新——基座 v0.38.0/v0.29.0/v0.8.11 + 矩阵 tier0 新 tag（按本仓依赖取齐）
+
+发版时刻地板时效门禁要求追平。
+兼容性实测：go build / go vet / go test -race -count=1 ./... 全绿，go mod tidy -diff 无漂移。
+
+
 ## [v0.10.1] — 2026-11-08
 
 - 杂务(deps)：依赖地板追到最新——github.com/oekit/pkg v0.37.4
