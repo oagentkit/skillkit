@@ -2,6 +2,10 @@
 
 > 本文件由 `matrix-tools/scripts/gen_changelogs.py` 从 git 历史生成，按 tag 切段、取每段内的 conventional commit 渲染。
 
+## [v0.10.4] — 2026-11-09
+
+- 杂务(deps)：依赖地板追到最新——guardx v0.24.0 / textx v0.10.6
+
 ## [v0.10.3] — 2026-11-09
 
 ### 修复：skillkit 第三轮 issue 清零（#66 #67）
