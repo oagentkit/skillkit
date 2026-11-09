@@ -309,3 +309,62 @@ func TestFileProviderConcurrentResolveInvalidate(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+// TestFileProviderFingerprintStatBeforeRead skillkit#77 回归：指纹 stat 此前
+// 取在 ReadFile **之后**——写落在「读结束→指纹 stat」窗内时，缓存条目持有
+// v1 内容却挂着 v2 的指纹，fresh() 对比的是同一次写之后的盘面，永久命中，
+// 陈旧内容与陈旧 Checksum 被无限期返回、无信号。指纹必须先于读：任何在
+// 指纹之后完成的写都会让盘面与条目失配，下一次复验必然重载。
+func TestFileProviderFingerprintStatBeforeRead(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "demo", "SKILL.md")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	v1 := "---\nname: demo\ndescription: 第一版\n---\n\nbody-v1-short\n"
+	v2 := strings.Replace(v1, "body-v1-short", "body-v2-longer-and-different", 1)
+	if err := os.WriteFile(path, []byte(v1), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	fp := NewFileProvider(dir)
+	var seq []string
+	fp.statFn = func(p string) (os.FileInfo, error) {
+		seq = append(seq, "stat")
+		return os.Stat(p)
+	}
+	fp.readFileFn = func(p string) ([]byte, error) {
+		seq = append(seq, "read")
+		b, err := os.ReadFile(p)
+		if err == nil && strings.Contains(string(b), "body-v1") {
+			// 宿主编辑写回落在读改窗内：读结束的同一瞬间盘面已是 v2
+			// （size 变长，指纹必变——不赌 mtime 粒度）
+			if werr := os.WriteFile(p, []byte(v2), 0o644); werr != nil {
+				t.Errorf("模拟并发写回失败: %v", werr)
+			}
+		}
+		return b, err
+	}
+	ctx := context.Background()
+	s1, err := fp.Resolve(ctx, Ref{Name: "demo"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s1.Content != "body-v1-short" {
+		t.Fatalf("首读内容不符: %q", s1.Content)
+	}
+	// 竞态写之后的下一次 Resolve 必须看到盘上 v2——缺陷形态：条目挂着竞态
+	// 写之后的指纹，fresh() 永久命中，v1 连同陈旧 Checksum 被无限期返回。
+	s2, err := fp.Resolve(ctx, Ref{Name: "demo"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s2.Content != "body-v2-longer-and-different" {
+		t.Fatalf("读改窗内的写后 Resolve 仍回陈旧缓存（skillkit#77 缺陷）: %q", s2.Content)
+	}
+	if s2.Checksum == s1.Checksum {
+		t.Fatal("竞态写后 checksum 必须随动")
+	}
+	if len(seq) < 2 || seq[0] != "stat" || seq[1] != "read" {
+		t.Fatalf("指纹 stat 必须先于读（skillkit#77 修复点）: %v", seq)
+	}
+}

@@ -86,11 +86,17 @@ func setMappingScalar(m *yaml.Node, key, val string) error {
 
 // RewriteBody 保留 frontmatter 围栏（原文不动），仅替换正文——编辑器路径。
 // 无 frontmatter 或未闭合 → 报错（围栏是元数据的唯一保护壳，不整段重建）。
+// 文档头判定与解析器同口径（skillkit#78）：trimDocHead 剥 BOM/前导空白——
+// 带 BOM（Windows 编辑器常见产物）或前导空行的文档 parseFrontmatter 与
+// RewriteMode 都接受，编辑路径此前裸 HasPrefix(content, "---") 以「无
+// frontmatter」误拒（文件有 frontmatter，解析器也认）；围栏块之后的围栏
+// 保留与坐标切分语义不变（#66），坐标全部基于剥离后的 trimmed。
 func RewriteBody(content, body string) (string, error) {
-	if !strings.HasPrefix(content, "---") {
+	trimmed := trimDocHead(content)
+	if !strings.HasPrefix(trimmed, "---") {
 		return "", fmt.Errorf("skill: SKILL.md 无 frontmatter，无法编辑正文")
 	}
-	rest := strings.TrimPrefix(content[3:], "\r")
+	rest := strings.TrimPrefix(trimmed[3:], "\r")
 	if !strings.HasPrefix(rest, "\n") {
 		return "", fmt.Errorf("skill: SKILL.md 无 frontmatter，无法编辑正文")
 	}
@@ -103,13 +109,13 @@ func RewriteBody(content, body string) (string, error) {
 		return "", fmt.Errorf("skill: frontmatter 未闭合，拒绝编辑")
 	}
 	// kept = 起始围栏到闭合围栏行（含）：blockEnd 指向闭合 "---" 前的 \n。
-	// 切原串必须用 rest 的**真实头偏移**（skillkit#66）：起始围栏 CRLF 时
-	// 上面的 TrimPrefix 已吃掉 \r，rest 坐标系相对 content 左移 1 字节——
+	// 切串必须用 rest 的**真实头偏移**（skillkit#66）：起始围栏 CRLF 时
+	// 上面的 TrimPrefix 已吃掉 \r，rest 坐标系相对 trimmed 左移 1 字节——
 	// 按写死的 3 切，混排 EOL（CRLF 起始围栏 + LF 内行，Windows 编辑器
 	// 保存的单文件常态形态）下切点落在真实围栏 \n 的前一个字节，恰好裁掉
 	// frontmatter 末行内容的最后一个字节（version: 1.2.3 → 1.2.，回读解析
 	// 成功零报错的静默递进腐蚀；全 CRLF 文档碰巧丢的是 \r 才漏网）。
-	head := len(content) - len(rest) // 3（LF 起始围栏）或 4（CRLF）
-	kept := content[:head+blockEnd] + "\n---"
+	head := len(trimmed) - len(rest) // 3（LF 起始围栏）或 4（CRLF）
+	kept := trimmed[:head+blockEnd] + "\n---"
 	return kept + "\n\n" + strings.TrimRight(body, "\n") + "\n", nil
 }
