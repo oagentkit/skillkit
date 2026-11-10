@@ -31,6 +31,10 @@ SKILL.md（Windows 编辑器常见产物，stripBOM 存在的缘由）被编辑�
 「无 frontmatter」误拒。入口对齐 RewriteMode：trimDocHead 后再判围栏，
 围栏保留与 #66 坐标切分语义不变。
 
+- 杂务(deps)：依赖地板追到最新——guardx v0.24.2 / textx v0.10.8 / runtime v0.12.7（2026-11-11 列车）
+
+Co-authored-by: Murphy-Yi <zhangyi@Murphy-YideMac-Mini.local>
+
 - 杂务(deps)：依赖地板追到最新——github.com/oekit/pkg v0.43.0
 
 | 依赖 | 现地板 | 抬到 |
