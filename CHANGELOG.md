@@ -2,6 +2,93 @@
 
 > 本文件由 `matrix-tools/scripts/gen_changelogs.py` 从 git 历史生成，按 tag 切段、取每段内的 conventional commit 渲染。
 
+## [v0.10.5] — 2026-11-11
+
+### 修复(skill)：Describe miss 口径统一 + Name 两 Provider 口径文档化（#83 #84）
+
+- #84 Library.Describe 正常路径 miss 补「仅含名字的零值」返回（一行）——
+  与 nil 接收者同口径，注释承诺「未知名字返回仅含名字的零值」对两条 miss
+  路径同时成立
+- #83 Skill.Name 字段文档写明两 Provider 口径差异（FileProvider=frontmatter
+  展示名、Library=规范引用名）与「身份比对请用 Ref.Name」守则；双 Provider
+  对照测试补 Name 断言钉住现状。统一口径是破坏式变更（FileProvider 侧被
+  TestFrontmatterParsed 钉住），文档里给出走 breaking 变更的路径
+测试按 issue 号命名新增 2 条回归用例；go test ./... 全绿。
+Co-authored-by: Murphy-Yi <zhangyi@Murphy-YideMac-Mini.local>
+
+### 修复(skill)：FileProvider 指纹先于读、RewriteBody 文档头与解析器同口径（#77 #78）
+
+skillkit#77：FileProvider.Resolve 此前在读文件之后才取 mtime+size 指纹——
+写落在「读结束→指纹 stat」窗内时，缓存条目持有旧内容却挂着竞态写之后的
+指纹，fresh() 对比的是同一次写之后的盘面，永久命中，陈旧内容与陈旧
+Checksum 无限期返回、无信号。指纹改为紧贴读前的 stat 快照：任何在指纹
+之后完成的写都会让盘面与条目失配，下一次复验必然重载；stat 失败的候选
+不读（无指纹可挂），#36 的错误记录口径不变。附 stat/read 测试缝供竞态
+时序确定性编排（skill_test.go 注入，生产路径不触碰）。
+skillkit#78：RewriteBody 此前用裸 HasPrefix(content, "---") 判文档头——
+parseFrontmatter 与 RewriteMode 经 trimDocHead 接受的 BOM / 前导空白
+SKILL.md（Windows 编辑器常见产物，stripBOM 存在的缘由）被编辑路径以
+「无 frontmatter」误拒。入口对齐 RewriteMode：trimDocHead 后再判围栏，
+围栏保留与 #66 坐标切分语义不变。
+
+- 杂务(deps)：依赖地板追到最新——github.com/oekit/pkg v0.42.0
+
+| 依赖 | 现地板 | 抬到 |
+|---|---|---|
+| `github.com/oekit/pkg` | `v0.41.1` | `v0.42.0` |
+## 为什么
+矩阵的**发版时刻地板时效**门禁（`verify_tag_floor --ref HEAD`）要求：各仓 HEAD
+（= 下次发版会发出去的内容）的依赖地板，相对那一刻的依赖最新版本，不能已落后。
+oekit 基座与矩阵模块都在高频发版 ⇒ 地板是**跑步机**，落后一格就会判红。
+## 兼容性实测
+本工具在提交前跑完 `go build` / `go vet` / `go test -race -count=1 ./...`（全绿才提交）
+与 `go mod tidy -diff`（无漂移）⇒ 改动**只影响依赖版本**，零行为差异。
+只改 `go.mod` / `go.sum` ⇒ 不需要 CHANGELOG 条目（版本段由下次发版的 `prewrite` 生成）。
+Co-authored-by: Murphy-Yi <zhangyi@Murphy-YideMac-Mini.local>
+
+- 杂务(deps)：依赖地板追到最新——github.com/oagentkit/textx v0.10.7
+
+| 依赖 | 现地板 | 抬到 |
+|---|---|---|
+| `github.com/oagentkit/textx` | `v0.10.6` | `v0.10.7` |
+## 为什么
+矩阵的**发版时刻地板时效**门禁（`verify_tag_floor --ref HEAD`）要求：各仓 HEAD
+（= 下次发版会发出去的内容）的依赖地板，相对那一刻的依赖最新版本，不能已落后。
+oekit 基座与矩阵模块都在高频发版 ⇒ 地板是**跑步机**，落后一格就会判红。
+## 兼容性实测
+本工具在提交前跑完 `go build` / `go vet` / `go test -race -count=1 ./...`（全绿才提交）
+与 `go mod tidy -diff`（无漂移）⇒ 改动**只影响依赖版本**，零行为差异。
+只改 `go.mod` / `go.sum` ⇒ 不需要 CHANGELOG 条目（版本段由下次发版的 `prewrite` 生成）。
+
+- 杂务(deps)：依赖地板追到最新——github.com/oagentkit/guardx v0.24.1
+
+| 依赖 | 现地板 | 抬到 |
+|---|---|---|
+| `github.com/oagentkit/guardx` | `v0.24.0` | `v0.24.1` |
+## 为什么
+矩阵的**发版时刻地板时效**门禁（`verify_tag_floor --ref HEAD`）要求：各仓 HEAD
+（= 下次发版会发出去的内容）的依赖地板，相对那一刻的依赖最新版本，不能已落后。
+oekit 基座与矩阵模块都在高频发版 ⇒ 地板是**跑步机**，落后一格就会判红。
+## 兼容性实测
+本工具在提交前跑完 `go build` / `go vet` / `go test -race -count=1 ./...`（全绿才提交）
+与 `go mod tidy -diff`（无漂移）⇒ 改动**只影响依赖版本**，零行为差异。
+只改 `go.mod` / `go.sum` ⇒ 不需要 CHANGELOG 条目（版本段由下次发版的 `prewrite` 生成）。
+
+- 杂务(deps)：依赖地板追到最新——github.com/oekit/pkg v0.41.1
+
+| 依赖 | 现地板 | 抬到 |
+|---|---|---|
+| `github.com/oekit/pkg` | `v0.40.0` | `v0.41.1` |
+## 为什么
+矩阵的**发版时刻地板时效**门禁（`verify_tag_floor --ref HEAD`）要求：各仓 HEAD
+（= 下次发版会发出去的内容）的依赖地板，相对那一刻的依赖最新版本，不能已落后。
+oekit 基座与矩阵模块都在高频发版 ⇒ 地板是**跑步机**，落后一格就会判红。
+## 兼容性实测
+本工具在提交前跑完 `go build` / `go vet` / `go test -race -count=1 ./...`（全绿才提交）
+与 `go mod tidy -diff`（无漂移）⇒ 改动**只影响依赖版本**，零行为差异。
+只改 `go.mod` / `go.sum` ⇒ 不需要 CHANGELOG 条目（版本段由下次发版的 `prewrite` 生成）。
+
+
 ## [v0.10.4] — 2026-11-09
 
 - 杂务(deps)：依赖地板追到最新——guardx v0.24.0 / textx v0.10.6
