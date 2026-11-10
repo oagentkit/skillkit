@@ -5,8 +5,8 @@ go 1.24.0
 require (
 	github.com/Masterminds/semver/v3 v3.3.1
 	github.com/cloudwego/eino v0.9.21
-	github.com/oagentkit/guardx v0.24.1
-	github.com/oagentkit/textx v0.10.7
+	github.com/oagentkit/guardx v0.24.2
+	github.com/oagentkit/textx v0.10.8
 	github.com/oekit/pkg v0.43.0
 	gopkg.in/yaml.v3 v3.0.1
 )
@@ -25,6 +25,7 @@ require (
 	github.com/json-iterator/go v1.1.12 // indirect
 	github.com/klauspost/cpuid/v2 v2.2.9 // indirect
 	github.com/mailru/easyjson v0.7.7 // indirect
+	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
 	github.com/modern-go/reflect2 v1.0.2 // indirect
 	github.com/nikolalohinski/gonja v1.5.3 // indirect
