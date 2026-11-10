@@ -313,7 +313,13 @@ func (l *Library) Describe(name string) LibMeta {
 	if l == nil {
 		return LibMeta{Name: name}
 	}
-	return l.byName[name].Meta
+	if m, ok := l.byName[name]; ok {
+		return m.Meta
+	}
+	// miss 路径与 nil 接收者同口径（oagentkit/skillkit#84）：注释承诺「未知
+	// 名字返回仅含名字的零值」，此前正常路径 miss 返回零值 LibMeta（Name=""），
+	// 同一函数两种 miss 语义。
+	return LibMeta{Name: name}
 }
 
 // Names 全部技能名（字典序稳定——消费链直接拼提示词/比对清单文本，map 迭代

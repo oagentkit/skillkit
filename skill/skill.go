@@ -35,6 +35,14 @@ type Ref struct {
 // SKILL.md 支持 Agent Skills 标准的 frontmatter（--- 围栏内 name/description 行）：
 // description 服务于发现与决策使用（渐进披露），正文才是消费主体。
 type Skill struct {
+	// Name 技能名。⚠️ **两 Provider 口径不同**（oagentkit/skillkit#83，既有
+	// 契约、双 Provider 对照测试钉住）：FileProvider 取 frontmatter 展示名
+	// （未声明时回落目录名）；Library 恒取规范引用名（目录名）。做身份比对/
+	// 去重的消费方请以 Ref.Name（请求引用名）为准，勿用本字段跨 Provider
+	// 比对——同一份 SKILL.md（目录名 sop、frontmatter name: 展示名）两侧
+	// 分别得「展示名」与「sop」。统一口径是破坏式变更（FileProvider 侧行为
+	// 被 decision_test 的 TestFrontmatterParsed 钉住），需维护者裁决后另开
+	// breaking 变更，届时展示名应有独立字段。
 	Name        string
 	Version     string // frontmatter 声明（未声明为空串）；ref.Version 是请求约束/缓存键，不回显
 	Description string // frontmatter description（无则空）
