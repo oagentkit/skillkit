@@ -73,9 +73,11 @@ type Provider interface {
 // 缓存与新鲜度（oagentkit/skillkit#56）：缓存条目带源文件 stat 指纹
 // （mtime+size），Resolve 命中前先复验，盘上编辑（含宿主经 RewriteMode/
 // RewriteBody 改写后写回的编辑流）下一次 Resolve 即可见——每次命中付出一次
-// os.Stat 的代价，换取「编辑-重载」循环无进程级陈旧。粗粒度 FS 上同 size 且
-// 同 mtime 的改写指纹抓不住，可经 Invalidate 显式强制重读。复验发现文件消失
-// 按陈旧处理走重读——删除以「未找到」错误如实上抛，不再被旧缓存掩护。
+// os.Stat 的代价，换取「编辑-重载」循环无进程级陈旧。指纹取**读取前**的
+// stat 快照（skillkit#77）：读改窗内的竞态写不会被吸收进指纹让旧内容永久
+// 免检。粗粒度 FS 上同 size 且同 mtime 的改写指纹抓不住，可经 Invalidate
+// 显式强制重读。复验发现文件消失按陈旧处理走重读——删除以「未找到」错误
+// 如实上抛，不再被旧缓存掩护。
 type FileProvider struct {
 	// OnCorrupt 单个 skill 解析失败回调（nil 安全，oagentkit/skillkit#36）：
 	// ListSkills 对损坏条目 continue 跳过（发现不阻塞），损坏经此观测——
@@ -84,6 +86,12 @@ type FileProvider struct {
 	OnCorrupt func(name string, err error)
 
 	Root string
+
+	// 测试缝（skillkit#77 竞态复现用）：nil = os.Stat / os.ReadFile。生产
+	// 路径不触碰（构造后由测试在首次 Resolve 前注入一次），注入后 stat/读
+	// 的时序可在测试里确定性编排。
+	statFn     func(string) (os.FileInfo, error)
+	readFileFn func(string) ([]byte, error)
 
 	mu      sync.RWMutex
 	cache   map[string]*fileCacheEntry // key = name@version（与 cacheKey 同键空间）
@@ -110,6 +118,21 @@ func cacheKey(ref Ref) string {
 		return ref.Name + "@" + ref.Version
 	}
 	return ref.Name
+}
+
+// statFile / readFile 源文件访问单源（测试缝注入点，nil 回落标准库）。
+func (p *FileProvider) statFile(path string) (os.FileInfo, error) {
+	if p.statFn != nil {
+		return p.statFn(path)
+	}
+	return os.Stat(path)
+}
+
+func (p *FileProvider) readFile(path string) ([]byte, error) {
+	if p.readFileFn != nil {
+		return p.readFileFn(path)
+	}
+	return os.ReadFile(path)
 }
 
 // Invalidate 显式失效缓存：清掉 name 的全部缓存键（含 name@version 变体，
@@ -154,7 +177,7 @@ func (p *FileProvider) Resolve(ctx context.Context, ref Ref) (*Skill, error) {
 	if err != nil {
 		return nil, err
 	}
-	s, path, err := p.loadSkill(ref, name)
+	s, path, fi, err := p.loadSkill(ref, name)
 	if err != nil {
 		// 陈旧条目的重读失败（如源文件已被删）：清掉旧条目再如实上抛，
 		// 不留半失效状态
@@ -163,12 +186,10 @@ func (p *FileProvider) Resolve(ctx context.Context, ref Ref) (*Skill, error) {
 		p.mu.Unlock()
 		return nil, err
 	}
-	// 指纹取加载后立刻 stat 的快照（读改窗内再被编辑的极端形态由下一次
-	// 复验兜住——指纹只承诺「此后可见」，不承诺读改原子性）
-	fi, err := os.Stat(path)
-	if err != nil {
-		return nil, fmt.Errorf("skill: 读取 %s 失败: %w", ref.Name, err)
-	}
+	// 指纹即读取前的 stat 快照（skillkit#77）：读取前的指纹保证任何在其后
+	// 完成的写都让盘面与条目失配，下一次复验必然重载——读窗内被编辑时本次
+	// 返回的可能是旧内容（竞态语义既定），但旧内容不会再被竞态写吸收进
+	// 指纹而永久免检（「读后取指纹」的缺陷形态）。
 	p.mu.Lock()
 	p.cache[key] = &fileCacheEntry{skill: s, path: path, mtime: fi.ModTime(), size: fi.Size()}
 	p.mu.Unlock()
@@ -182,7 +203,7 @@ func (p *FileProvider) Resolve(ctx context.Context, ref Ref) (*Skill, error) {
 // （重复 I/O、后写覆盖，读到的都是同一份盘上内容）——Resolve 不引入
 // 全局串行点，锁内只做 map 读写。
 func (p *FileProvider) fresh(e *fileCacheEntry) bool {
-	fi, err := os.Stat(e.path)
+	fi, err := p.statFile(e.path)
 	if err != nil {
 		return false
 	}
@@ -205,34 +226,47 @@ func safeSkillName(refName string) (string, error) {
 }
 
 // loadSkill 读盘并剥 frontmatter 组装 Skill（checksum 对正文计算）。
-// 返回实际命中的候选路径——缓存指纹（mtime+size）指向它（#56）。
-func (p *FileProvider) loadSkill(ref Ref, name string) (*Skill, string, error) {
+// 返回实际命中的候选路径与**读取前**的 stat 快照——缓存指纹（mtime+size）
+// 指向它（#56；指纹先于内容是 skillkit#77 的修复点：读后取指纹会把读改窗
+// 内的竞态写吸收进指纹，旧内容从此免检）。
+func (p *FileProvider) loadSkill(ref Ref, name string) (*Skill, string, os.FileInfo, error) {
 	candidates := []string{
 		filepath.Join(p.Root, name, "SKILL.md"),
 		filepath.Join(p.Root, name+".md"),
 	}
 	var data []byte
 	var loaded string
+	var fi os.FileInfo
 	var readErr error
 	for _, c := range candidates {
-		b, err := os.ReadFile(c)
-		if err == nil {
-			data = b
-			loaded = c
-			break
+		// 指纹先于内容：stat 紧贴读前取快照——任何在指纹之后完成的写都让
+		// 盘面与条目失配、下一次复验必然重载；stat 失败的候选不读（无指纹
+		// 可挂），错误同 #36 口径记录：非「未找到」在全候选失败时如实上抛
+		si, err := p.statFile(c)
+		if err != nil {
+			if !errors.Is(err, fs.ErrNotExist) {
+				readErr = err
+			}
+			continue
 		}
-		if !errors.Is(err, fs.ErrNotExist) {
-			// 权限拒绝/I/O 错误不是「未找到」——原样记录并在全候选失败时
-			// 上抛（oagentkit/skillkit#36：此前任意 ReadFile 错误都被当
-			// 不存在吞掉，权限故障被误诊为文件缺失，排查方向完全反了）
-			readErr = err
+		b, err := p.readFile(c)
+		if err != nil {
+			if !errors.Is(err, fs.ErrNotExist) {
+				// 权限拒绝/I/O 错误不是「未找到」——原样记录并在全候选失败时
+				// 上抛（oagentkit/skillkit#36：此前任意 ReadFile 错误都被当
+				// 不存在吞掉，权限故障被误诊为文件缺失，排查方向完全反了）
+				readErr = err
+			}
+			continue
 		}
+		data, loaded, fi = b, c, si
+		break
 	}
 	if data == nil {
 		if readErr != nil {
-			return nil, "", fmt.Errorf("skill: 读取 %s 失败: %w", ref.Name, readErr)
+			return nil, "", nil, fmt.Errorf("skill: 读取 %s 失败: %w", ref.Name, readErr)
 		}
-		return nil, "", fmt.Errorf("skill: 未找到 %s（尝试 %v）", ref.Name, candidates)
+		return nil, "", nil, fmt.Errorf("skill: 未找到 %s（尝试 %v）", ref.Name, candidates)
 	}
 	// frontmatter 元数据剥离；checksum 对正文计算（canonical 口径，见 Skill.Checksum）
 	fmName, fmDesc, fmVer, body, fmWarn := parseFrontmatter(string(data))
@@ -245,7 +279,7 @@ func (p *FileProvider) loadSkill(ref Ref, name string) (*Skill, string, error) {
 	// Version 请求约束兑现（oagentkit/skillkit#37）：请求版本非空且与
 	// frontmatter 声明不符即报错——此前只当缓存键，约束静默裸奔
 	if ref.Version != "" && fmVer != ref.Version {
-		return nil, "", fmt.Errorf("skill: %s 版本不符：请求 %s，库内 %s", ref.Name, ref.Version, fmVer)
+		return nil, "", nil, fmt.Errorf("skill: %s 版本不符：请求 %s，库内 %s", ref.Name, ref.Version, fmVer)
 	}
 	displayName := ref.Name
 	if fmName != "" {
@@ -257,7 +291,7 @@ func (p *FileProvider) loadSkill(ref Ref, name string) (*Skill, string, error) {
 		Description: fmDesc,
 		Content:     body,
 		Checksum:    contentChecksum(body),
-	}, loaded, nil
+	}, loaded, fi, nil
 }
 
 // ---------- 发现与决策使用（渐进披露） ----------

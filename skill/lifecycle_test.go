@@ -305,3 +305,35 @@ func TestVersionInRange(t *testing.T) {
 		}
 	}
 }
+
+// TestRewriteBodyToleratesDocHead 编辑路径与解析器同口径（skillkit#78）：
+// parseFrontmatter / RewriteMode 经 trimDocHead 接受的 BOM / 前导空白文档，
+// RewriteBody 不得以裸 HasPrefix(content, "---") 误报「无 frontmatter」——
+// 该形态恰是 stripBOM 存在的缘由（Windows 编辑器常见产物），解析、加载、
+// RewriteMode 全通而编辑路径独拒是误诊。
+func TestRewriteBodyToleratesDocHead(t *testing.T) {
+	for i, src := range []string{
+		"\ufeff---\nname: demo\nmode: static\n---\n\n旧正文\n",   // Windows 编辑器 BOM
+		"\n\t---\nname: demo\nmode: static\n---\n\n旧正文\n",     // 前导空白
+		"\ufeff---\r\nname: demo\nmode: static\n---\n\n旧正文\n", // BOM + CRLF 起始围栏（#66+#78 叠加形态）
+	} {
+		// 对照组：解析器与 RewriteMode 都接受该形态
+		if _, _, _, body, _ := parseFrontmatter(src); body != "旧正文" {
+			t.Fatalf("夹具 %d：对照组解析失败: %q", i, body)
+		}
+		if _, err := RewriteMode(src, ModeOnDemand); err != nil {
+			t.Fatalf("夹具 %d：对照组 RewriteMode 拒绝: %v", i, err)
+		}
+		out, err := RewriteBody(src, "新正文")
+		if err != nil {
+			t.Fatalf("夹具 %d：解析器可读的文档头不应被拒（skillkit#78 缺陷）: %v", i, err)
+		}
+		if !strings.Contains(out, "name: demo") || !strings.Contains(out, "新正文") || strings.Contains(out, "旧正文") {
+			t.Fatalf("夹具 %d：RewriteBody 产物异常: %q", i, out)
+		}
+		// 回读解析零损：改写产物仍是解析器可读的 frontmatter + 新正文
+		if _, _, _, body, _ := parseFrontmatter(out); body != "新正文" {
+			t.Fatalf("夹具 %d：改写产物回读失败: %q", i, body)
+		}
+	}
+}
