@@ -2,6 +2,17 @@
 
 > 本文件由 `matrix-tools/scripts/gen_changelogs.py` 从 git 历史生成，按 tag 切段、取每段内的 conventional commit 渲染。
 
+## [v0.10.6] — 2026-11-11
+
+### 修复(skill)：缓存键空间归一 + Title 归一化两侧同口径（#85 #86）
+
+- #85 Resolve 缓存键改用归一化后的引用名——键空间不再随拼写分裂（./foo 与
+  foo 同一条目），Invalidate 的归一化删除口径与键空间一致，非规范拼写装出
+  的条目不再永不过期（等长同 mtime 改写后旧内容持续外发）
+- #86 Library 装载期 Meta.Title 与规范引用名相同时置空——「避免展示名与
+  引用名重复」的字段契约两 Provider 一个口径（此前 Library 原样透传）
+Co-authored-by: Murphy-Yi <zhangyi@Murphy-YideMac-Mini.local>
+
 ## [v0.10.5] — 2026-11-11
 
 ### 修复(skill)：Describe miss 口径统一 + Name 两 Provider 口径文档化（#83 #84）
