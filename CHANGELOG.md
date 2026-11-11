@@ -13,6 +13,11 @@
   引用名重复」的字段契约两 Provider 一个口径（此前 Library 原样透传）
 Co-authored-by: Murphy-Yi <zhangyi@Murphy-YideMac-Mini.local>
 
+- 杂务(deps)：依赖地板追到最新——github.com/oekit/pkg v0.44.0
+
+Co-authored-by: Murphy-Yi <zhangyi@Murphy-YideMac-Mini.local>
+
+
 ## [v0.10.5] — 2026-11-11
 
 ### 修复(skill)：Describe miss 口径统一 + Name 两 Provider 口径文档化（#83 #84）
