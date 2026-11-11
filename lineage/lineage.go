@@ -9,7 +9,8 @@
 package lineage
 
 import (
-	"sort"
+	"cmp"
+	"slices"
 	"sync/atomic"
 
 	"github.com/oagentkit/skillkit/pack"
@@ -173,18 +174,18 @@ func attachManifests(lin *Lineage, manifests map[string]*pack.ToolManifest) {
 
 func stabilize(lin *Lineage) {
 	for slug, e := range lin.Experts {
-		sort.Strings(e.Skills)
-		sort.Strings(e.Grants)
+		slices.Sort(e.Skills)
+		slices.Sort(e.Grants)
 		lin.Experts[slug] = e
 	}
 	for n, e := range lin.Skills {
-		sort.Strings(e.UsedBy)
+		slices.Sort(e.UsedBy)
 		lin.Skills[n] = e
 	}
 	for s, e := range lin.MCPS {
-		sort.Strings(e.GrantedBy)
-		sort.Strings(e.UsedBySkills)
-		sort.Strings(e.Tools)
+		slices.Sort(e.GrantedBy)
+		slices.Sort(e.UsedBySkills)
+		slices.Sort(e.Tools)
 		lin.MCPS[s] = e
 	}
 }
@@ -292,8 +293,8 @@ func diffTools(prev, cur *Lineage, out []Impact) []Impact {
 			}
 		}
 		if len(added) > 0 || len(removed) > 0 {
-			sort.Strings(added)
-			sort.Strings(removed)
+			slices.Sort(added)
+			slices.Sort(removed)
 			out = append(out, Impact{Type: "tools_changed", Server: server,
 				ToolsAdded: added, ToolsRemoved: removed,
 				UsedBy: cur.MCPS[server].GrantedBy})
@@ -329,8 +330,8 @@ func diffRefs(prev, cur *Lineage, out []Impact) []Impact {
 			}
 		}
 		if len(added) > 0 || len(removed) > 0 {
-			sort.Strings(added)
-			sort.Strings(removed)
+			slices.Sort(added)
+			slices.Sort(removed)
 			out = append(out, Impact{Type: "refs_changed", Expert: slug,
 				SkillsAdded: added, SkillsRemoved: removed})
 		}
@@ -339,18 +340,18 @@ func diffRefs(prev, cur *Lineage, out []Impact) []Impact {
 }
 
 func sortImpacts(out []Impact) {
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].Type != out[j].Type {
-			return out[i].Type < out[j].Type
+	slices.SortFunc(out, func(a, b Impact) int {
+		if c := cmp.Compare(a.Type, b.Type); c != 0 {
+			return c
 		}
 		// 逐字段比较：免每对拼接三个键串
-		if out[i].Skill != out[j].Skill {
-			return out[i].Skill < out[j].Skill
+		if c := cmp.Compare(a.Skill, b.Skill); c != 0 {
+			return c
 		}
-		if out[i].Expert != out[j].Expert {
-			return out[i].Expert < out[j].Expert
+		if c := cmp.Compare(a.Expert, b.Expert); c != 0 {
+			return c
 		}
-		return out[i].Server < out[j].Server
+		return cmp.Compare(a.Server, b.Server)
 	})
 }
 
@@ -410,12 +411,7 @@ func (l *Lineage) Focus(focus string, depth int) (*LineageFocus, bool) {
 	if l == nil {
 		return nil, false
 	}
-	if depth < 1 {
-		depth = 1
-	}
-	if depth > 2 {
-		depth = 2
-	}
+	depth = min(max(depth, 1), 2)
 	kind, ok := l.kindOf(focus)
 	if !ok {
 		return nil, false
@@ -456,30 +452,29 @@ func (l *Lineage) kindOf(name string) (string, bool) {
 }
 
 func sortFocus(res *LineageFocus) {
-	sort.Slice(res.Nodes, func(i, j int) bool {
-		if res.Nodes[i].Kind != res.Nodes[j].Kind {
-			return res.Nodes[i].Kind < res.Nodes[j].Kind
+	slices.SortFunc(res.Nodes, func(a, b LineageNode) int {
+		if c := cmp.Compare(a.Kind, b.Kind); c != 0 {
+			return c
 		}
-		return res.Nodes[i].Name < res.Nodes[j].Name
+		return cmp.Compare(a.Name, b.Name)
 	})
-	sort.Slice(res.Edges, func(i, j int) bool {
-		a, b := res.Edges[i], res.Edges[j]
-		if a.From.Kind != b.From.Kind {
-			return a.From.Kind < b.From.Kind
+	slices.SortFunc(res.Edges, func(a, b LineageEdge) int {
+		if c := cmp.Compare(a.From.Kind, b.From.Kind); c != 0 {
+			return c
 		}
-		if a.From.Name != b.From.Name {
-			return a.From.Name < b.From.Name
+		if c := cmp.Compare(a.From.Name, b.From.Name); c != 0 {
+			return c
 		}
 		// 全键比较（oagentkit/skillkit#38）：同名异类节点（skill "x" 与
-		// server "x"）此前比较键相同，sort.Slice 不稳定 ⇒ 输出序跨 run
+		// server "x"）此前比较键相同，不稳定排序 ⇒ 输出序跨 run
 		// 不可复现，违反包头的确定性契约。To.Kind 与 Relation 补齐。
-		if a.To.Kind != b.To.Kind {
-			return a.To.Kind < b.To.Kind
+		if c := cmp.Compare(a.To.Kind, b.To.Kind); c != 0 {
+			return c
 		}
-		if a.To.Name != b.To.Name {
-			return a.To.Name < b.To.Name
+		if c := cmp.Compare(a.To.Name, b.To.Name); c != 0 {
+			return c
 		}
-		return a.Relation < b.Relation
+		return cmp.Compare(a.Relation, b.Relation)
 	})
 }
 

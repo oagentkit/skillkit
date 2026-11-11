@@ -11,7 +11,7 @@ import (
 	"fmt"
 	"io/fs"
 	"path"
-	"sort"
+	"slices"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -32,7 +32,7 @@ func LayoutDirs(fsys fs.FS) (baseline string, packs []string, err error) {
 			packs = append(packs, d.Name())
 		}
 	}
-	sort.Strings(packs)
+	slices.Sort(packs)
 	return LayoutBaseline, packs, nil
 }
 
@@ -146,10 +146,5 @@ func (m *ToolManifest) Has(tool string) bool {
 	if m == nil {
 		return false
 	}
-	for _, t := range m.Tools {
-		if t.Name == tool {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(m.Tools, func(t ManifestTool) bool { return t.Name == tool })
 }
