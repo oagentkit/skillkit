@@ -13,6 +13,10 @@
   引用名重复」的字段契约两 Provider 一个口径（此前 Library 原样透传）
 Co-authored-by: Murphy-Yi <zhangyi@Murphy-YideMac-Mini.local>
 
+- 杂务(deps)：依赖地板追到最新——guardx v0.24.3 / textx v0.10.9
+
+Co-authored-by: Murphy-Yi <zhangyi@Murphy-YideMac-Mini.local>
+
 - 杂务(deps)：依赖地板追到最新——github.com/oekit/pkg v0.44.0
 
 Co-authored-by: Murphy-Yi <zhangyi@Murphy-YideMac-Mini.local>
