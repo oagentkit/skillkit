@@ -270,6 +270,13 @@ func loadEntry(fsys fs.FS, prefix, source, name string, cfg *loadConfig, lib *Li
 	if err := meta.Validate(); err != nil {
 		return fmt.Errorf("skill: %s: %w", p, err)
 	}
+	// Title 归一化对齐 FileProvider（skillkit#86）：展示名与规范引用名相同
+	// 时置空——「避免展示名与引用名重复」的字段契约（Meta.Title doc）在两
+	// Provider 一个口径；此前 Library 原样透传，同一份 SKILL.md 两侧
+	// Meta.Title 分别为空串与引用名。
+	if meta.Title == name {
+		meta.Title = ""
+	}
 	lib.byName[name] = LibEntry{Full: string(data), Body: body, Meta: meta, sum: contentChecksum(body)}
 	if meta.Title != "" && meta.Title != name {
 		// 同 Title 多技能时取目录名字典序最小者（确定性规则——FileProvider 的
