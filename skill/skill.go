@@ -173,17 +173,21 @@ func (p *FileProvider) Resolve(ctx context.Context, ref Ref) (*Skill, error) {
 		return nil, fmt.Errorf("skill: 来源 %q 暂未实现（仅支持 file），ref=%s", ref.Source, ref.Name)
 	}
 
-	key := cacheKey(ref)
+	name, err := safeSkillName(ref.Name)
+	if err != nil {
+		return nil, err
+	}
+	// 缓存键用**归一化后**的引用名（skillkit#85）：此前先算键后归一——
+	// "./foo" 与 "foo" 落不同键（键空间随拼写分裂），而 Invalidate 只删
+	// 归一化键 ⇒ 非规范拼写装出的条目**永不过期**，等长同 mtime 改写后旧
+	// 内容持续外发。键空间归一后同一 skill 单条目，Invalidate 的归一化
+	// 删除口径与键空间一致。
+	key := cacheKey(Ref{Name: name, Version: ref.Version})
 	p.mu.RLock()
 	cached := p.cache[key]
 	p.mu.RUnlock()
 	if cached != nil && p.fresh(cached) {
 		return cached.skill, nil
-	}
-
-	name, err := safeSkillName(ref.Name)
-	if err != nil {
-		return nil, err
 	}
 	s, path, fi, err := p.loadSkill(ref, name)
 	if err != nil {
