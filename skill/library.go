@@ -1,13 +1,14 @@
 package skill
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"io/fs"
 	"path"
 	"regexp"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 
@@ -339,7 +340,7 @@ func (l *Library) Names() []string {
 	for n := range l.byName {
 		out = append(out, n)
 	}
-	sort.Strings(out)
+	slices.Sort(out)
 	return out
 }
 
@@ -381,7 +382,7 @@ func (l *Library) ListSkills(_ context.Context) ([]Meta, error) {
 			Description: e.Meta.Description,
 		})
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	slices.SortFunc(out, func(a, b Meta) int { return cmp.Compare(a.Name, b.Name) })
 	return out, nil
 }
 
@@ -425,6 +426,6 @@ func (l *Library) DeprecatedExpiredInUse(used map[string][]string, now time.Time
 			out = append(out, name)
 		}
 	}
-	sort.Strings(out) // 失败清单确定性排序（reload/lint 断言可复现）
+	slices.Sort(out) // 失败清单确定性排序（reload/lint 断言可复现）
 	return out
 }
