@@ -45,6 +45,9 @@ type Skill struct {
 
 // SkillFromMeta 把 skill.LibMeta 投影为血缘输入（字段映射的唯一事实源——
 // 装配方不再手工逐字段对拷，LibMeta 演进时单点跟进）。
+// 投影按引用切片（不拷底层数组）；Build 组装时物化拷贝，故已发布的图快照
+// 与 LibMeta 不共享底层数组（skillkit#108）——装配方在 Build 之后改写
+// LibMeta 不会穿透进血缘图。
 func SkillFromMeta(m skill.LibMeta) Skill {
 	return Skill{
 		Name:        m.Name,
@@ -109,23 +112,42 @@ func Build(experts []Expert, skills []Skill, manifests map[string]*pack.ToolMani
 
 func registerSkills(lin *Lineage, skills []Skill) {
 	for _, s := range skills {
+		// 物化拷贝（skillkit#108）：图内集合不与装配方输入共享底层数组，
+		// 断开 LibMeta → Skill → SkillEdges 的三层别名链；否则装配方侧后续
+		// 写会穿透到 Hub 已发布的并发读快照上（atomic.Pointer 只保指针原子换）。
 		lin.Skills[s.Name] = SkillEdges{
-			RequiresMCP: s.RequiresMCP, Provides: s.Provides,
+			RequiresMCP: cloneDeps(s.RequiresMCP), Provides: slices.Clone(s.Provides),
 			Version: s.Version, Maturity: s.Maturity,
 			Source: s.Source, Deprecated: s.Deprecated,
 		}
 	}
 }
 
+// cloneDeps 拷贝依赖切片连同每条的 Tools 明细（断链断到底——顶层切片拷了、
+// 元素里的切片仍是别名则写穿照旧）。
+func cloneDeps(deps []skill.MCPDep) []skill.MCPDep {
+	out := slices.Clone(deps)
+	for i := range out {
+		out[i].Tools = slices.Clone(out[i].Tools)
+	}
+	return out
+}
+
 func linkGrants(lin *Lineage, experts []Expert) {
 	for _, e := range experts {
 		grants := make([]string, 0, len(e.Grants))
+		// 同 server 多 grant：grants/GrantedBy 也去重——与下文 Tools 的并集口径
+		// 同一循环两套口径是遗漏（skillkit#109）。seen 提到外层，免每 grant 重建。
+		seenServers := map[string]bool{}
 		// 同 server 多 grant 时 seen 提到外层，免每 grant 重建
 		seenByServer := map[string]map[string]bool{}
 		for _, g := range e.Grants {
-			grants = append(grants, g.Server)
 			edge := lin.MCPS[g.Server]
-			edge.GrantedBy = append(edge.GrantedBy, e.Slug)
+			if !seenServers[g.Server] {
+				seenServers[g.Server] = true
+				grants = append(grants, g.Server)
+				edge.GrantedBy = append(edge.GrantedBy, e.Slug)
+			}
 			if len(g.Allow) == 0 {
 				edge.Unlimited = true // allow 空=该 server 全部工具
 			}
@@ -145,8 +167,11 @@ func linkGrants(lin *Lineage, experts []Expert) {
 			}
 			lin.MCPS[g.Server] = edge
 		}
-		lin.Experts[e.Slug] = ExpertEdges{Skills: e.Skills, Overridden: e.Overridden, Grants: grants}
-		for _, n := range e.Skills {
+		// 物化拷贝（skillkit#108）：stabilize 随后会原地排序这份 Skills，
+		// 别名传入会把排序写穿回装配方切片并穿透到已发布快照。
+		skills := slices.Clone(e.Skills)
+		lin.Experts[e.Slug] = ExpertEdges{Skills: skills, Overridden: e.Overridden, Grants: grants}
+		for _, n := range skills {
 			edge := lin.Skills[n]
 			edge.UsedBy = append(edge.UsedBy, e.Slug)
 			lin.Skills[n] = edge
@@ -156,7 +181,14 @@ func linkGrants(lin *Lineage, experts []Expert) {
 
 func linkSkillMCPDeps(lin *Lineage) {
 	for n, edge := range lin.Skills {
+		// 同 server 拆多条依赖声明（不同工具子集/min_version）结构上允许，
+		// UsedBySkills 按 server 去重一次（skillkit#109，与 GrantedBy 同口径）。
+		seen := map[string]bool{}
 		for _, dep := range edge.RequiresMCP {
+			if seen[dep.Server] {
+				continue
+			}
+			seen[dep.Server] = true
 			m := lin.MCPS[dep.Server]
 			m.UsedBySkills = append(m.UsedBySkills, n)
 			lin.MCPS[dep.Server] = m
@@ -480,6 +512,8 @@ func sortFocus(res *LineageFocus) {
 
 // Hub 血缘中枢：reload/Resync 时重建（Set），list API 与 lineage 端点共享读。
 // 快照用 atomic.Pointer 整体原子换（与 hotplug.Holder 同一并发纪律，内联省一层依赖）。
+// 写侧彼此并发安全（skillkit#110）：Set 单次 Store；Resync 因须「沿用上次 Set 的
+// 清单」是读-改-写，经 CAS 循环原子完成——与并发 Set 竞态时不会用旧清单回滚新 Set。
 // 零值可用；nil *Hub 的全部方法安全 no-op（测试/未接线路径）。
 type Hub struct {
 	st atomic.Pointer[hubState]
@@ -504,16 +538,22 @@ func (h *Hub) Set(lin *Lineage, manifests map[string]*pack.ToolManifest) {
 }
 
 // Resync 仅替换血缘图（清单沿用上次 Set 的——挂摘/启停类变化不改契约面）。
+// 清单沿用经 CAS 循环原子读-改-写（skillkit#110）：Load 与落地之间若有并发 Set，
+// CAS 失败即重读最新清单——刚落地的 Set 更新不会被旧清单静默回滚。
 func (h *Hub) Resync(lin *Lineage) {
 	if h == nil {
 		return
 	}
-	cur := h.st.Load()
-	m := map[string]*pack.ToolManifest(nil)
-	if cur != nil {
-		m = cur.manifests
+	for {
+		cur := h.st.Load()
+		var m map[string]*pack.ToolManifest
+		if cur != nil {
+			m = cur.manifests
+		}
+		if h.st.CompareAndSwap(cur, &hubState{lin: lin, manifests: m}) {
+			return
+		}
 	}
-	h.Set(lin, m)
 }
 
 // Get 当前血缘（未 Set 过为 nil，调用方回退现场构建）。
