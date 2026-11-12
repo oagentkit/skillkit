@@ -2,6 +2,8 @@ package lineage
 
 import (
 	"slices"
+	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/oagentkit/skillkit/pack"
@@ -201,6 +203,178 @@ func TestSortFocusDeterministicSameNameDifferentKind(t *testing.T) {
 			if first.Edges[i] != next.Edges[i] {
 				t.Fatalf("第 %d 轮排序不稳定（同名异类节点间序漂移）: 边 %d %+v vs %+v", round, i, first.Edges[i], next.Edges[i])
 			}
+		}
+	}
+}
+
+// TestBuildCopiesCallerInputs（skillkit#108）：Build 是「只读图机制」入口——
+// 不得原地改写装配方输入（stabilize 的排序不得写穿），图内集合不得与装配方
+// 底层数组同址（否则装配方复用切片会穿透改写 Hub 已发布的并发读快照）。
+func TestBuildCopiesCallerInputs(t *testing.T) {
+	skills := []string{"zeta", "alpha"}
+	provides := []string{"p1", "p2"}
+	deps := []skill.MCPDep{{Server: "sec", Tools: []string{"collect"}}}
+	lin := Build(
+		[]Expert{{Slug: "e1", Skills: skills}},
+		[]Skill{{Name: "s1", RequiresMCP: deps, Provides: provides}},
+		nil,
+	)
+
+	// 写穿：Build 不得重排装配方给的顺序。
+	if !slices.Equal(skills, []string{"zeta", "alpha"}) {
+		t.Fatalf("Build 原地重排了调用方 Expert.Skills：%v", skills)
+	}
+	// 别名穿透矩阵：改写装配方底层数组，图内三项 + dep.Tools 均不得跟随。
+	skills[0] = "MUT"
+	provides[0] = "MUT"
+	deps[0].Server = "MUT"
+	deps[0].Tools[0] = "MUT"
+	if got := lin.Experts["e1"].Skills; !slices.Equal(got, []string{"alpha", "zeta"}) {
+		t.Fatalf("ExpertEdges.Skills 与调用方共享底层数组（排序也写穿）：%v", got)
+	}
+	se := lin.Skills["s1"]
+	if !slices.Equal(se.Provides, []string{"p1", "p2"}) {
+		t.Fatalf("SkillEdges.Provides 与调用方共享底层数组：%v", se.Provides)
+	}
+	if len(se.RequiresMCP) != 1 || se.RequiresMCP[0].Server != "sec" ||
+		!slices.Equal(se.RequiresMCP[0].Tools, []string{"collect"}) {
+		t.Fatalf("SkillEdges.RequiresMCP（含 Tools 明细）与调用方共享底层数组：%+v", se.RequiresMCP)
+	}
+
+	// 已发布快照：Hub.Set 之后装配方再写，快照不得变（并发读者看到的图不可变）。
+	h := NewHub()
+	h.Set(lin, nil)
+	skills[1] = "MUT"
+	provides[1] = "MUT"
+	if got := h.Get().Experts["e1"].Skills; !slices.Equal(got, []string{"alpha", "zeta"}) {
+		t.Fatalf("已发布快照被装配方写穿：%v", got)
+	}
+	if got := h.Get().Skills["s1"].Provides; !slices.Equal(got, []string{"p1", "p2"}) {
+		t.Fatalf("已发布快照 Provides 被装配方写穿：%v", got)
+	}
+
+	// 别名链源头：SkillFromMeta 按引用投影 LibMeta，Build 后改写 LibMeta 不得进图。
+	meta := skill.LibMeta{
+		Name:        "s2",
+		Provides:    []string{"x"},
+		RequiresMCP: []skill.MCPDep{{Server: "srv2", Tools: []string{"t2"}}},
+	}
+	lin2 := Build(nil, []Skill{SkillFromMeta(meta)}, nil)
+	meta.Provides[0] = "MUT"
+	meta.RequiresMCP[0].Server = "MUT"
+	meta.RequiresMCP[0].Tools[0] = "MUT"
+	s2 := lin2.Skills["s2"]
+	if !slices.Equal(s2.Provides, []string{"x"}) ||
+		s2.RequiresMCP[0].Server != "srv2" || !slices.Equal(s2.RequiresMCP[0].Tools, []string{"t2"}) {
+		t.Fatalf("LibMeta 别名链穿透进图：%+v", s2)
+	}
+}
+
+// TestBuildDedupsGrantAndDepReverseFields（skillkit#109）：同 server 多 grant /
+// 多依赖声明时，grants/granted_by/used_by_skills 去重——与同循环内 Tools 的
+// 并集口径一致（反查字段是单一事实源，重复项会流进全部 list API 与 Diff impact）。
+func TestBuildDedupsGrantAndDepReverseFields(t *testing.T) {
+	lin := Build(
+		[]Expert{{
+			Slug:   "e1",
+			Skills: []string{"s1"},
+			Grants: []Grant{
+				{Server: "sec", Allow: []string{"a"}},
+				{Server: "sec", Allow: []string{"b"}},
+			},
+		}},
+		[]Skill{{
+			Name:        "s1",
+			RequiresMCP: []skill.MCPDep{{Server: "sec"}, {Server: "sec", Tools: []string{"b"}}},
+		}},
+		nil,
+	)
+	m := lin.MCPS["sec"]
+	if !slices.Equal(m.GrantedBy, []string{"e1"}) {
+		t.Fatalf("同 server 多 grant 未去重 GrantedBy：%v", m.GrantedBy)
+	}
+	if !slices.Equal(m.UsedBySkills, []string{"s1"}) {
+		t.Fatalf("同 server 多依赖声明未去重 UsedBySkills：%v", m.UsedBySkills)
+	}
+	if !slices.Equal(lin.Experts["e1"].Grants, []string{"sec"}) {
+		t.Fatalf("同 server 多 grant 未去重 Grants：%v", lin.Experts["e1"].Grants)
+	}
+	// 并集不回归：两笔 grant 的 allow 仍是并集去重。
+	if !slices.Equal(m.Tools, []string{"a", "b"}) {
+		t.Fatalf("Tools 并集口径回归：%v", m.Tools)
+	}
+
+	// 跨专家：不同专家各记一次，同专家重复 grant 不叠记。
+	lin2 := Build([]Expert{
+		{Slug: "e1", Grants: []Grant{{Server: "sec"}, {Server: "sec"}}},
+		{Slug: "e2", Grants: []Grant{{Server: "sec"}}},
+	}, nil, nil)
+	if !slices.Equal(lin2.MCPS["sec"].GrantedBy, []string{"e1", "e2"}) {
+		t.Fatalf("跨专家 GrantedBy 错误：%v", lin2.MCPS["sec"].GrantedBy)
+	}
+}
+
+// TestHubResyncConcurrentSetNoLostUpdate（skillkit#110）：Resync 的「沿用上次 Set
+// 的清单」是 atomic.Pointer 上的读-改-写——若非原子（Load 与 Store 之间被并发
+// Set 插入），会把更新的契约清单静默回滚成旧版。两条不变量钉住根因：
+//  1. 终态：全部写方落定后，清单必须是本轮 Set 写入的 2.0.0（Resync 只换图）；
+//  2. 过程：观察方（watcher）看到的清单版本只前进不后退（Resync 恒不改清单值）。
+//
+// 正确实现（CAS 循环）下两条恒成立；非原子 RMW 下随并发度放大命中。
+func TestHubResyncConcurrentSetNoLostUpdate(t *testing.T) {
+	h := NewHub()
+	lin := Build(nil, nil, nil)
+	manifest := func(v string) map[string]*pack.ToolManifest {
+		return map[string]*pack.ToolManifest{"srv": {Server: "srv", Version: v}}
+	}
+	const rounds = 20000
+	for r := 0; r < rounds; r++ {
+		h.Set(lin, manifest("1.0.0"))
+		var writes, watch sync.WaitGroup
+		var done, sawNew, regressed atomic.Bool
+
+		// 观察方：清单版本只前进不后退。
+		watch.Add(1)
+		go func() {
+			defer watch.Done()
+			for !done.Load() {
+				m := h.Manifests()["srv"]
+				if m == nil {
+					continue
+				}
+				if m.Version == "2.0.0" {
+					sawNew.Store(true)
+				} else if sawNew.Load() {
+					regressed.Store(true)
+					return
+				}
+			}
+		}()
+
+		for i := 0; i < 4; i++ {
+			writes.Add(2)
+			go func() {
+				defer writes.Done()
+				for j := 0; j < 4; j++ {
+					h.Set(lin, manifest("2.0.0"))
+				}
+			}()
+			go func() {
+				defer writes.Done()
+				for j := 0; j < 4; j++ {
+					h.Resync(lin)
+				}
+			}()
+		}
+		writes.Wait()
+		done.Store(true)
+		watch.Wait()
+
+		if regressed.Load() {
+			t.Fatalf("第 %d 轮：观察方看到清单版本回退——Resync 用旧清单覆盖并发 Set", r)
+		}
+		if m := h.Manifests()["srv"]; m == nil || m.Version != "2.0.0" {
+			t.Fatalf("第 %d 轮：Resync 把并发 Set 的新清单静默回滚，终态清单=%+v", r, m)
 		}
 	}
 }
