@@ -45,9 +45,10 @@ type Skill struct {
 
 // SkillFromMeta 把 skill.LibMeta 投影为血缘输入（字段映射的唯一事实源——
 // 装配方不再手工逐字段对拷，LibMeta 演进时单点跟进）。
-// 投影按引用切片（不拷底层数组）；Build 组装时物化拷贝，故已发布的图快照
-// 与 LibMeta 不共享底层数组（skillkit#108）——装配方在 Build 之后改写
-// LibMeta 不会穿透进血缘图。
+// 切片按引用投影（不拷底层数组）、Deprecated 指针解引用复制（skillkit#112：
+// 指针目标是会被读改的活数据，投影期即与 LibMeta 断开）；Build 组装时
+// 物化拷贝切片，故已发布的图快照与 LibMeta 不共享底层数组
+// （skillkit#108）——装配方在 Build 之后改写 LibMeta 不会穿透进血缘图。
 func SkillFromMeta(m skill.LibMeta) Skill {
 	return Skill{
 		Name:        m.Name,
@@ -56,7 +57,7 @@ func SkillFromMeta(m skill.LibMeta) Skill {
 		Source:      m.Source,
 		RequiresMCP: m.RequiresMCP,
 		Provides:    m.Provides,
-		Deprecated:  m.Deprecated,
+		Deprecated:  cloneDeprecated(m.Deprecated),
 	}
 }
 
@@ -115,12 +116,26 @@ func registerSkills(lin *Lineage, skills []Skill) {
 		// 物化拷贝（skillkit#108）：图内集合不与装配方输入共享底层数组，
 		// 断开 LibMeta → Skill → SkillEdges 的三层别名链；否则装配方侧后续
 		// 写会穿透到 Hub 已发布的并发读快照上（atomic.Pointer 只保指针原子换）。
+		// Deprecated 指针同口径解引用复制（skillkit#112：#108 修的是切片面，
+		// 指针目标共享是同一命题的剩余解——调用方改 RemoveAfter/文案，
+		// 已发布快照跟着变）。
 		lin.Skills[s.Name] = SkillEdges{
 			RequiresMCP: cloneDeps(s.RequiresMCP), Provides: slices.Clone(s.Provides),
 			Version: s.Version, Maturity: s.Maturity,
-			Source: s.Source, Deprecated: s.Deprecated,
+			Source: s.Source, Deprecated: cloneDeprecated(s.Deprecated),
 		}
 	}
+}
+
+// cloneDeprecated 弃用指针的解引用复制（skillkit#112）：图快照与调用方的
+// skill 对象不得共享 Deprecated 结构——该结构是会被读改的活数据
+// （library 的生命周期路径读改 RemoveAfter），共享即并发读者可见的快照漂移。
+func cloneDeprecated(d *skill.Deprecated) *skill.Deprecated {
+	if d == nil {
+		return nil
+	}
+	c := *d
+	return &c
 }
 
 // cloneDeps 拷贝依赖切片连同每条的 Tools 明细（断链断到底——顶层切片拷了、
@@ -199,7 +214,14 @@ func linkSkillMCPDeps(lin *Lineage) {
 func attachManifests(lin *Lineage, manifests map[string]*pack.ToolManifest) {
 	for server, m := range manifests {
 		edge := lin.MCPS[server]
-		edge.Manifest = m
+		if m != nil {
+			// 物化拷贝（skillkit#112）：指针直入图时调用方改 m.Version/m.Tools
+			// 会让已发布 lineage 的契约清单静默变脸——与 #108 的切片口径对齐，
+			// 清单结构连同 Tools 切片一并复制。
+			mc := *m
+			mc.Tools = slices.Clone(m.Tools)
+			edge.Manifest = &mc
+		}
 		lin.MCPS[server] = edge
 	}
 }

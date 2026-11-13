@@ -173,8 +173,10 @@ func TestSkillFromMeta(t *testing.T) {
 		Title: "展示名", Path: "k8s/skills/sop/SKILL.md", Description: "desc",
 	}
 	got := SkillFromMeta(meta)
+	// Deprecated 按值比对（skillkit#112 起投影期解引用复制，指针同一性不再是
+	// 契约——共享指针正是被修掉的别名面）。
 	if got.Name != "sop" || got.Version != "1.2.0" || got.Maturity != "stable" ||
-		got.Source != "k8s" || got.Deprecated != dep ||
+		got.Source != "k8s" || got.Deprecated == nil || *got.Deprecated != *dep ||
 		!slices.Equal(got.Provides, []string{"triage"}) ||
 		len(got.RequiresMCP) != 1 || got.RequiresMCP[0].Server != "sec" {
 		t.Fatalf("SkillFromMeta 映射不符: %+v", got)
