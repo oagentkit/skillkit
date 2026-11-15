@@ -86,11 +86,15 @@ type Provider interface {
 // 免检。粗粒度 FS 上同 size 且同 mtime 的改写指纹抓不住，可经 Invalidate
 // 显式强制重读。复验发现文件消失按陈旧处理走重读——删除以「未找到」错误
 // 如实上抛，不再被旧缓存掩护。
+// 别名表（frontmatter 展示名→规范引用名）与缓存同一新鲜度口径
+// （skillkit#121）：任何一次读盘重载与 Invalidate 都让它整体失效，下次
+// CanonicalName 重扫——改 frontmatter name 后清单展示与加载归一化同步刷新。
 type FileProvider struct {
 	// OnCorrupt 单个 skill 解析失败回调（nil 安全，oagentkit/skillkit#36）：
 	// ListSkills 对损坏条目 continue 跳过（发现不阻塞），损坏经此观测——
-	// 此前静默丢弃，清单缺一条无从归因。本仓不引入日志依赖（tier 纪律），
-	// 宿主经回调接告警面。
+	// 此前静默丢弃，清单缺一条无从归因。同名双形态并存（root/<name>/ 与
+	// root/<name>.md，skillkit#125）的布局冲突亦经此留痕。本仓不引入日志
+	// 依赖（tier 纪律），宿主经回调接告警面。
 	OnCorrupt func(name string, err error)
 
 	Root string
@@ -144,14 +148,17 @@ func (p *FileProvider) readFile(path string) ([]byte, error) {
 }
 
 // Invalidate 显式失效缓存：清掉 name 的全部缓存键（含 name@version 变体，
-// 归一化口径同 safeSkillName）。供宿主在 stat 指纹抓不住的写路径后调用
-// （粗粒度 FS 上的等长同 mtime 改写、NFS 等不可靠 mtime 来源），也可用于
-// 写后强制一致。未知名字安全（无操作）。
+// 归一化口径同 safeSkillName），并一并清空别名表（展示名→引用名，懒扫描
+// 派生视图，oagentkit/skillkit#121）——改 frontmatter name 后旧别名不得
+// 继续指向该条目，下次 CanonicalName 全目录重扫。供宿主在 stat 指纹抓不住
+// 的写路径后调用（粗粒度 FS 上的等长同 mtime 改写、NFS 等不可靠 mtime
+// 来源），也可用于写后强制一致。未知名字安全（无操作）。
 func (p *FileProvider) Invalidate(name string) {
 	name = strings.TrimSpace(name)
 	clean := filepath.Clean("/" + name)[1:]
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	p.aliases = nil
 	for key := range p.cache {
 		if key == name || key == clean ||
 			strings.HasPrefix(key, name+"@") || strings.HasPrefix(key, clean+"@") {
@@ -203,6 +210,12 @@ func (p *FileProvider) Resolve(ctx context.Context, ref Ref) (*Skill, error) {
 	// 返回的可能是旧内容（竞态语义既定），但旧内容不会再被竞态写吸收进
 	// 指纹而永久免检（「读后取指纹」的缺陷形态）。
 	p.mu.Lock()
+	// 任何一次读盘重载都可能改变 frontmatter 展示名（改名/新增）⇒ 别名表
+	// 整体失效（oagentkit/skillkit#121）：别名表是全目录派生视图，单条
+	// Resolve 无法逐项精确修补；清空后由 CanonicalName 懒重建（既有缓存
+	// 条目仍在，重建只多一遍 stat 复验）。此前别名表只在首扫写入、全文件
+	// 无清空点——清单展示新 Title、按新 Title 加载恒失败。
+	p.aliases = nil
 	p.cache[key] = &fileCacheEntry{skill: s, path: path, mtime: fi.ModTime(), size: fi.Size()}
 	p.mu.Unlock()
 	return s, nil
@@ -311,45 +324,70 @@ func (p *FileProvider) loadSkill(ref Ref, name string) (*Skill, string, os.FileI
 // ListSkills 枚举目录下全部 skill 的元数据（不含正文）。
 // 供提示词注入"可用 skill 清单"——agent 据此决策加载哪个（经 use_skill 工具）。
 // 实现 Lister 接口。
+//
+// 同一引用名的两种布局（root/<name>/SKILL.md 与 root/<name>.md）并存时只产出
+// 一条（oagentkit/skillkit#125）：目录形态优先，与 loadSkill 的候选序同口径
+// （.md 形态在候选序里是回退项，其内容不会参与加载）。此前两形态归一成同一
+// refName 后各自 Resolve，清单出现两条同名条目、.md 侧编辑永不生效且零信号；
+// 冲突经 OnCorrupt 留痕。
 func (p *FileProvider) ListSkills(ctx context.Context) ([]Meta, error) {
 	entries, err := os.ReadDir(p.Root)
 	if err != nil {
 		return nil, fmt.Errorf("skill: 目录读取失败 %s: %w", p.Root, err)
 	}
 	var out []Meta
-	for _, e := range entries {
-		name := e.Name()
-		var refName string
-		switch {
-		case e.IsDir():
-			refName = name // root/<name>/SKILL.md
-		case strings.HasSuffix(name, ".md"):
-			refName = strings.TrimSuffix(name, ".md") // root/<name>.md
-		default:
-			continue
-		}
-		s, err := p.Resolve(ctx, Ref{Name: refName})
-		if err != nil {
-			// 单个 skill 损坏不阻塞发现，但要**留痕**（rag#33 同款教训：
-			// 静默丢弃让损坏无信号，清单缺一条无从归因）。本仓不引入日志
-			// 依赖（tier 纪律）——观测走 OnCorrupt 回调，宿主接线告警面。
-			if p.OnCorrupt != nil {
-				p.OnCorrupt(refName, err)
+	seen := make(map[string]bool, len(entries))
+	// 两遍扫描显式钉住「目录优先」：不依赖 ReadDir 的字典序恰好把 foo 排在
+	// foo.md 之前（条目名是 refName 前缀，字典序通常成立，但优先级应是契约）。
+	for pass := 0; pass < 2; pass++ {
+		for _, e := range entries {
+			name := e.Name()
+			var refName string
+			switch {
+			case pass == 0 && e.IsDir():
+				refName = name // root/<name>/SKILL.md
+			case pass == 1 && !e.IsDir() && strings.HasSuffix(name, ".md"):
+				refName = strings.TrimSuffix(name, ".md") // root/<name>.md
+			default:
+				continue
 			}
-			continue
+			if seen[refName] {
+				// 同名双形态并存：只报一次（第二遍命中的 .md 侧），按目录
+				// 形态加载；.md 侧内容不参与发现/加载，属布局异常而非数据
+				// 损坏——仍经同一观测面留痕，避免「编辑 .md 永远不生效」零信号。
+				if p.OnCorrupt != nil {
+					p.OnCorrupt(refName, fmt.Errorf(
+						"skill: 同名双形态并存（%s/ 与 %s.md），按目录形态加载，.md 侧内容被忽略",
+						refName, refName))
+				}
+				continue
+			}
+			seen[refName] = true
+			s, err := p.Resolve(ctx, Ref{Name: refName})
+			if err != nil {
+				// 单个 skill 损坏不阻塞发现，但要**留痕**（rag#33 同款教训：
+				// 静默丢弃让损坏无信号，清单缺一条无从归因）。本仓不引入日志
+				// 依赖（tier 纪律）——观测走 OnCorrupt 回调，宿主接线告警面。
+				if p.OnCorrupt != nil {
+					p.OnCorrupt(refName, err)
+				}
+				continue
+			}
+			title := ""
+			if s.Name != refName {
+				title = s.Name // frontmatter name 与目录名不同：作为展示别名
+			}
+			out = append(out, Meta{Name: refName, Title: title, Version: s.Version, Description: s.Description})
 		}
-		title := ""
-		if s.Name != refName {
-			title = s.Name // frontmatter name 与目录名不同：作为展示别名
-		}
-		out = append(out, Meta{Name: refName, Title: title, Version: s.Version, Description: s.Description})
 	}
 	return out, nil
 }
 
 // CanonicalName 把展示名（frontmatter name）归一化为规范引用名（目录名/文件名）。
-// 未命中返回 ("", false)。别名表懒扫描构建（进程内 skill 目录通常不变）；
-// 首次扫描为全目录磁盘 I/O，ctx 取消随链透传。
+// 未命中返回 ("", false)。别名表懒扫描构建，任何一次读盘重载或 Invalidate
+// 都会令其整体失效、下次调用重扫（oagentkit/skillkit#121）——改 frontmatter
+// name 后按新展示名可归一，旧别名不再指向该条目。首次扫描为全目录磁盘 I/O，
+// ctx 取消随链透传。
 func (p *FileProvider) CanonicalName(ctx context.Context, name string) (string, bool) {
 	// 精确名优先（与 Library.CanonicalName 的 byName 契约对齐）：技能 A 的
 	// frontmatter name 恰与技能 B 的目录名相同时，别名表不得把 B 重定向到 A。

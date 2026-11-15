@@ -461,6 +461,10 @@ func (l *Lineage) neighbors(n LineageNode) []adjacent {
 }
 
 // Focus 焦点邻接子图（无向遍历 depth 跳；depth 上限 2）。未知焦点返回 false。
+// 边按无向关系去重（oagentkit/skillkit#120）：无向遍历里同一关系会以
+// A→B（发现向）与 B→A（回边）各被邻接一次——节点有 seen 去重、边此前没有，
+// depth=2 时同一关系翻倍输出。去重键 = 两端 (kind,name) 的有序对 + Relation，
+// 保留首次发现时的方向。
 func (l *Lineage) Focus(focus string, depth int) (*LineageFocus, bool) {
 	if l == nil {
 		return nil, false
@@ -473,12 +477,17 @@ func (l *Lineage) Focus(focus string, depth int) (*LineageFocus, bool) {
 	res := &LineageFocus{Focus: LineageNode{Kind: kind, Name: focus}}
 	seen := map[LineageNode]bool{res.Focus: true}
 	res.Nodes = append(res.Nodes, res.Focus)
+	seenEdges := map[focusEdgeKey]bool{}
 	frontier := []LineageNode{res.Focus}
 	for d := 0; d < depth && len(frontier) > 0; d++ {
 		var next []LineageNode
 		for _, n := range frontier {
 			for _, nb := range l.neighbors(n) {
-				res.Edges = append(res.Edges, LineageEdge{From: n, To: nb.to, Relation: nb.relation})
+				e := LineageEdge{From: n, To: nb.to, Relation: nb.relation}
+				if k := focusEdgeKeyOf(e); !seenEdges[k] {
+					seenEdges[k] = true
+					res.Edges = append(res.Edges, e)
+				}
 				if !seen[nb.to] {
 					seen[nb.to] = true
 					res.Nodes = append(res.Nodes, nb.to)
@@ -490,6 +499,27 @@ func (l *Lineage) Focus(focus string, depth int) (*LineageFocus, bool) {
 	}
 	sortFocus(res)
 	return res, true
+}
+
+// focusEdgeKey 无向边去重键：端点按 (kind,name) 规范化排序 + 关系。
+type focusEdgeKey struct {
+	lo, hi   LineageNode
+	relation string
+}
+
+func focusEdgeKeyOf(e LineageEdge) focusEdgeKey {
+	lo, hi := e.From, e.To
+	if lineLessNode(hi, lo) {
+		lo, hi = hi, lo
+	}
+	return focusEdgeKey{lo: lo, hi: hi, relation: e.Relation}
+}
+
+func lineLessNode(a, b LineageNode) bool {
+	if a.Kind != b.Kind {
+		return a.Kind < b.Kind
+	}
+	return a.Name < b.Name
 }
 
 func (l *Lineage) kindOf(name string) (string, bool) {

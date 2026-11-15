@@ -151,6 +151,8 @@ type LibEntry struct {
 
 // Library 进程内技能库（可热替换；装载后只读，热替换=换新实例）。
 // 实现 Provider / Lister / AliasResolver。
+// 注意：AsSkillTool/Ask 等在装配期捕获 Provider，换新实例不会穿透已建工具
+// （skillkit#127）——reload 后需用新实例重新装配，或重新调用 Provider()。
 type Library struct {
 	byName map[string]LibEntry
 	// byTitle 展示名（frontmatter name）→ 目录名反查（装载期建；同名 Title
@@ -346,9 +348,19 @@ func (l *Library) Names() []string {
 
 // Resolve 实现 Provider（决策式加载：剥 frontmatter 正文 + canonical checksum——
 // 口径与 FileProvider 一致，见 Skill.Checksum）。
+//
+// Source 校验与 FileProvider 逐字同口径（oagentkit/skillkit#122）：空 = "file"，
+// 非 file 报「暂未实现」——此前 Library 全程不读 ref.Source，同一引用在
+// FileProvider 被拒、在 Library 静默返回，同接口两实现的来源维度口径分裂。
 func (l *Library) Resolve(_ context.Context, ref Ref) (*Skill, error) {
 	if l == nil {
 		return nil, fmt.Errorf("skill: 技能库未装配")
+	}
+	if ref.Source == "" {
+		ref.Source = "file"
+	}
+	if ref.Source != "file" {
+		return nil, fmt.Errorf("skill: 来源 %q 暂未实现（仅支持 file），ref=%s", ref.Source, ref.Name)
 	}
 	e, ok := l.byName[ref.Name]
 	if !ok {
@@ -401,7 +413,11 @@ func (l *Library) CanonicalName(_ context.Context, name string) (string, bool) {
 	return "", false
 }
 
-// Provider 返回自身作为决策式 Provider（热替换场景每次读当前库）。
+// Provider 返回自身作为决策式 Provider（读的是**本实例**的只读快照；
+// 热替换=LoadFromFS 换新实例，已装配的工具不会自动切换——AsSkillTool 在
+// 装配期捕获 Provider，reload 后须重建工具或重新取 Provider 再装配。
+// oagentkit/skillkit#127：此前 doc 称「热替换场景每次读当前库」，与
+// Library doc「装载后只读，热替换=换新实例」自相矛盾——按实现修正文档。）
 func (l *Library) Provider() Provider { return l }
 
 // 编译期断言。

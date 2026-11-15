@@ -36,7 +36,7 @@ func RenderList(metas []Meta, budget int) string {
 	}
 	names := make([]string, 0, len(metas))
 	for _, m := range metas {
-		names = append(names, m.Name)
+		names = append(names, listEntryName(m.Name))
 	}
 	degraded := "可用 skill 清单（清单超预算，已降级为纯名单；按名用 use_skill 加载，描述见技能库）：\n" +
 		strings.Join(names, ", ")
@@ -48,7 +48,11 @@ func RenderList(metas []Meta, budget int) string {
 		// TruncBytes rune 对齐截断（此前字节截断可切碎多字节技能名）
 		bodyBudget := budget - len(head) - len(tail)
 		if bodyBudget < 0 {
-			bodyBudget = 0
+			// 预算连头尾声明都装不下（skillkit#126）：退化为最小声明并按
+			// 预算截断。此前 clamp 到 0 仍拼 head+tail 原样返回，极小预算
+			// 下输出恒超限——「>0 = 预算字节」的契约在此分支静默失守。
+			minimal, _ := textutil.TruncBytes("可用 skill 清单过长，其余见技能库", budget)
+			return minimal
 		}
 		truncated, _ := textutil.TruncBytes(joined, bodyBudget)
 		// 回退到最后一个完整名（分隔符边界），避免截在名字中间
@@ -56,6 +60,10 @@ func RenderList(metas []Meta, budget int) string {
 			truncated = truncated[:i]
 		}
 		degraded = head + truncated + tail
+		// 兜底：任何分支都不输出超预算的字节（#126）
+		if len(degraded) > budget {
+			degraded, _ = textutil.TruncBytes(degraded, budget)
+		}
 	}
 	return degraded
 }
@@ -172,11 +180,19 @@ func capContent(out *useSkillOut, capBytes int) {
 	out.Checksum = contentChecksum(out.Content)
 }
 
+// listEntryName 清单条目名出口消毒（oagentkit/skillkit#119）：Name 不是来自
+// frontmatter 而是来自目录/文件名（FileProvider.ListSkills、Library.loadEntry），
+// POSIX 只禁 `/` 与 NUL——`\n`、`#`、`*`、`<!--` 全部合法。它与 Title/
+// Description 属同一半可信威胁模型：先折叠空白成单行（目录名本不应含空白，
+// 折叠无损），再交 EscapeUntrusted 中和行首结构标记——保证名字不越出条目行。
+func listEntryName(name string) string {
+	return fence.EscapeUntrusted(strings.Join(strings.Fields(name), " "))
+}
+
 // ListPrompt 渲染可用 skill 清单（注入提示词的决策依据，不含正文）。
-// Description 经 fence.EscapeUntrusted 中和（markdown 结构/HTML 注释边界）——
-// Name/Title/Description 来自仓库内 markdown，属半可信内容，恶意描述可夹带
-// 提示词注入指令；消毒在出口统一兜底，不依赖调用方自觉（目录写权限仍应收敛）。
-// 无 skill 返回空串；有则渲染为 markdown 列表。
+// Name 来自目录/文件名，Title/Description 来自仓库内 markdown，均属半可信
+// 内容（恶意命名/描述可夹带提示词注入指令）；消毒在出口统一兜底，不依赖调用方
+// 自觉（目录写权限仍应收敛）。无 skill 返回空串；有则渲染为 markdown 列表。
 // 加载名（Name）作为加粗主词——模型回填 use_skill 的名称必须与它一致；
 // 展示名（Title，frontmatter name）仅作括注。
 func ListPrompt(metas []Meta) string {
@@ -186,6 +202,7 @@ func ListPrompt(metas []Meta) string {
 	var b strings.Builder
 	b.WriteString("可用 skill 清单（如任务相关，用 use_skill 工具加载全文）：\n")
 	for _, m := range metas {
+		name := listEntryName(m.Name)
 		desc := fence.EscapeUntrusted(m.Description)
 		if desc == "" {
 			desc = "（无描述）"
@@ -197,9 +214,9 @@ func ListPrompt(metas []Meta) string {
 			// 同一威胁模型开了旁路。先折叠单行再消毒：折叠后的行首结构标记
 			// 由 EscapeUntrusted 中和。
 			title := fence.EscapeUntrusted(strings.Join(strings.Fields(m.Title), " "))
-			fmt.Fprintf(&b, "- **%s**（%s）：%s\n", m.Name, title, desc)
+			fmt.Fprintf(&b, "- **%s**（%s）：%s\n", name, title, desc)
 		} else {
-			fmt.Fprintf(&b, "- **%s**：%s\n", m.Name, desc)
+			fmt.Fprintf(&b, "- **%s**：%s\n", name, desc)
 		}
 	}
 	return b.String()

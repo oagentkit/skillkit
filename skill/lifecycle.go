@@ -1,18 +1,23 @@
 package skill
 
 import (
+	"bytes"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"gopkg.in/yaml.v3"
 )
 
 // RewriteMode 结构化切换 mode：frontmatter 块整体按 yaml.Node 承接，只对 mode
-// 标量做局部手术（已有则原位改值，没有则追加），其余键——含 LibMeta schema 外
-// 的未知键（SKILL.md 开放标准允许的 license/owner/工具注解等）——连同键序与
-// 注释一并原样保留，兑现「其余元数据字段原样保留」的文档承诺。
-// （oagentkit/skillkit#57：此前的 LibMeta 结构体 round-trip——yaml.Unmarshal
-// 忽略未知键 + re-marshal 只写已知字段——会把 schema 外的键静默删除。）
+// 标量做**字节级局部手术**（已有则原位替换该标量的原始字节，没有则追加一行），
+// 其余内容——含 schema 外的未知键（SKILL.md 开放标准允许的 license/owner/工具
+// 注解等）、键序、注释、缩进、空行与行尾注释——逐字原样保留。
+// （oagentkit/skillkit#57：此前的 LibMeta 结构体 round-trip 会把 schema 外的键
+// 静默删除；oagentkit/skillkit#124：node 手术后整块 yaml.Marshal 仍会按 yaml.v3
+// 规则重排——默认 4 空格缩进、空行丢失——「只改 mode」的承诺在格式面不成立。
+// 无法安全定位原始标量（标签/锚点/块标量等非常规形态）时回退 node 手术 +
+// 序列化：语义正确优先，缩进按原块探测，其余格式尽力保留。）
 // 无 frontmatter 或未闭合 → 报错（不猜格式，与解析 fail-fast 同哲学）；文档头
 // 判定与解析器同口径（trimDocHead 剥 BOM/前导空白，带 BOM 的文档不再被拒）。
 func RewriteMode(content, mode string) (string, error) {
@@ -27,22 +32,180 @@ func RewriteMode(content, mode string) (string, error) {
 	if !ok {
 		return "", fmt.Errorf("skill: frontmatter 未闭合")
 	}
+	// block 以起始围栏后的换行开头（splitFrontmatter 的坐标系）；剥掉它再
+	// 做行/列定位——yaml.Node 的 Line 从这行空行起算会整体偏移一格。
+	block = strings.TrimPrefix(block, "\n")
 	mapping, err := frontmatterMapping(block)
 	if err != nil {
 		return "", err
 	}
-	if err := setMappingScalar(mapping, "mode", mode); err != nil {
-		return "", err
-	}
-	b, err := yaml.Marshal(mapping)
+	rewritten, done, err := rewriteModeInPlace(block, mapping, mode)
 	if err != nil {
 		return "", err
 	}
-	fm := "---\n" + string(b) + "---"
+	if !done {
+		// 回退路径：node 手术改写语义，序列化按原块缩进（默认 2，不再用
+		// yaml.v3 的 4 空格默认值重排）。
+		if err := setMappingScalar(mapping, "mode", mode); err != nil {
+			return "", err
+		}
+		rewritten, err = marshalMount(mapping, block)
+		if err != nil {
+			return "", err
+		}
+	}
+	fm := "---\n" + rewritten + "---"
 	if body == "" {
 		return fm + "\n", nil
 	}
 	return fm + "\n\n" + body + "\n", nil
+}
+
+// rewriteModeInPlace 在原始 frontmatter 块里定位 mode 标量并只替换它的字节
+// （或没有 mode 键时追加一行）。ok=false 表示无法安全定位（调用方回退序列化）。
+// 返回的块以换行结尾（与 yaml.Marshal 的输出形态一致，拼接闭合围栏用）。
+func rewriteModeInPlace(block string, mapping *yaml.Node, mode string) (string, bool, error) {
+	for i := 0; i+1 < len(mapping.Content); i += 2 {
+		k, v := mapping.Content[i], mapping.Content[i+1]
+		if k.Kind != yaml.ScalarNode || k.Value != "mode" {
+			continue
+		}
+		if v.Kind != yaml.ScalarNode {
+			// 非标量 mode 由 setMappingScalar 报同款错误（回退路径）
+			return "", false, nil
+		}
+		raw, ok := yamlScalarRaw(v)
+		if !ok || raw == "" {
+			return "", false, nil
+		}
+		start, ok := lineColumnOffset(block, v.Line, v.Column)
+		if !ok || !strings.HasPrefix(block[start:], raw) {
+			return "", false, nil
+		}
+		newRaw := modeScalarRaw(mode, v.Style)
+		out := block[:start] + newRaw + block[start+len(raw):]
+		return ensureTrailingNewline(out), true, nil
+	}
+	return appendModeLine(block, mode), true, nil
+}
+
+// yamlScalarRaw 还原标量节点的原始单行文本（用于定位替换区间）。只接受能
+// 精确还原的形态：plain（无锚点）与单/双引号——含标签/锚点/块标量时返回
+// false，交回退路径，不猜。
+func yamlScalarRaw(v *yaml.Node) (string, bool) {
+	if v.Kind != yaml.ScalarNode || v.Anchor != "" {
+		return "", false
+	}
+	switch v.Style {
+	case 0: // plain（未加引号、无标签）
+		return v.Value, true
+	case yaml.DoubleQuotedStyle:
+		return strconv.Quote(v.Value), true
+	case yaml.SingleQuotedStyle:
+		return "'" + strings.ReplaceAll(v.Value, "'", "''") + "'", true
+	default:
+		return "", false
+	}
+}
+
+// modeScalarRaw 按原标量风格产出新值的原始文本（值都是 ASCII 标识符，
+// plain/单/双引号三种风格均无需转义）。
+func modeScalarRaw(mode string, style yaml.Style) string {
+	switch style {
+	case yaml.DoubleQuotedStyle:
+		return `"` + mode + `"`
+	case yaml.SingleQuotedStyle:
+		return "'" + mode + "'"
+	default:
+		return mode
+	}
+}
+
+// lineColumnOffset 把 yaml.Node 的 1-based (line, column) 换算成 block 的
+// 字节偏移。列按字节计——mode 键与值前缀都是 ASCII（顶层键），不存在
+// rune/byte 歧义。越界返回 false。
+func lineColumnOffset(block string, line, col int) (int, bool) {
+	if line < 1 || col < 1 {
+		return 0, false
+	}
+	off := 0
+	for i := 1; i < line; i++ {
+		j := strings.IndexByte(block[off:], '\n')
+		if j < 0 {
+			return 0, false
+		}
+		off += j + 1
+	}
+	lineText := block[off:]
+	if j := strings.IndexByte(lineText, '\n'); j >= 0 {
+		lineText = lineText[:j]
+	}
+	if col-1 > len(lineText) {
+		return 0, false
+	}
+	return off + col - 1, true
+}
+
+// ensureTrailingNewline 保证块以行终止结尾；块末若是 CRLF 的 \r 半边，
+// 补 \n 即完整 CRLF。
+func ensureTrailingNewline(block string) string {
+	if strings.HasSuffix(block, "\n") {
+		return block
+	}
+	return block + "\n"
+}
+
+// appendModeLine 在块末尾追加 mode 键（结尾无换行）；空块直接成行。
+// 行终止跟随原块的 CRLF/LF 形态，不额外引入混排。
+func appendModeLine(block, mode string) string {
+	if block == "" {
+		return "mode: " + mode + "\n"
+	}
+	eol := "\n"
+	if strings.Contains(block, "\r\n") {
+		eol = "\r\n"
+	}
+	if !strings.HasSuffix(block, "\n") {
+		if strings.HasSuffix(block, "\r") {
+			block += "\n" // 补齐原块末行的 CRLF
+		} else {
+			block += eol
+		}
+	}
+	return block + "mode: " + mode + eol
+}
+
+// marshalMount 回退序列化：yaml.Encoder + 探测原块缩进（不再用 yaml.v3
+// 默认的 4 空格整块重排，尽可能贴近手写排版）。
+func marshalMount(mapping *yaml.Node, originalBlock string) (string, error) {
+	var buf bytes.Buffer
+	enc := yaml.NewEncoder(&buf)
+	enc.SetIndent(frontmatterIndent(originalBlock))
+	if err := enc.Encode(mapping); err != nil {
+		return "", fmt.Errorf("skill: frontmatter 序列化失败: %w", err)
+	}
+	if err := enc.Close(); err != nil {
+		return "", fmt.Errorf("skill: frontmatter 序列化失败: %w", err)
+	}
+	return buf.String(), nil
+}
+
+// frontmatterIndent 探测原块的首个多空格缩进（2..8），探测不到用 2。
+// 仅服务回退序列化路径。
+func frontmatterIndent(block string) int {
+	for _, line := range strings.Split(block, "\n") {
+		trimmed := strings.TrimLeft(line, " ")
+		if trimmed == "" || len(trimmed) == len(line) {
+			continue
+		}
+		if n := len(line) - len(trimmed); n >= 2 {
+			if n > 8 {
+				n = 8
+			}
+			return n
+		}
+	}
+	return 2
 }
 
 // frontmatterMapping 把 frontmatter 块承接为键值映射节点（node 手术的手术台）。
