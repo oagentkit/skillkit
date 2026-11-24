@@ -5,8 +5,8 @@ go 1.26.0
 require (
 	github.com/Masterminds/semver/v3 v3.3.1
 	github.com/cloudwego/eino v0.9.21
-	github.com/oagentkit/guardx v0.29.0
-	github.com/oagentkit/textx v0.12.0
+	github.com/oagentkit/guardx v0.30.0
+	github.com/oagentkit/textx v0.13.0
 	github.com/oekit/pkg v0.60.0
 	gopkg.in/yaml.v3 v3.0.1
 )
