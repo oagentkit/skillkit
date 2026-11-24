@@ -74,8 +74,13 @@ github.com/oagentkit/guardx v0.30.0 h1:qRP488xwQ9IBruUgHVr8ogqG4zp7iAQlMwMe87vbp
 github.com/oagentkit/guardx v0.30.0/go.mod h1:qWTUIglBIT4ENUzNas8VjUpv0BwOYxYqklOaxbnp1WY=
 github.com/oagentkit/textx v0.13.0 h1:qrhMeP09gsDIAT1uwxgn2p/LifstxUcUuFaeR0zs3Ms=
 github.com/oagentkit/textx v0.13.0/go.mod h1:CIPGtmmFPhliFkh5apaqxMTc7ZStSsvYTtn/ADqKW+g=
+<<<<<<< HEAD
 github.com/oekit/pkg v0.61.1 h1:vJtwzIvkiMv5Xu9m1u6mglcw1sMiDJnPL7kzK8iEIlY=
 github.com/oekit/pkg v0.61.1/go.mod h1:Cr6sJpBX2a0gAIgLa32+NY69h/UZtuN6L1ZdXtP9upo=
+=======
+github.com/oekit/pkg v0.61.2 h1:QvD2SHz6AB4esg+tneqZUwCszY5H/Zku5smCXMvRQpc=
+github.com/oekit/pkg v0.61.2/go.mod h1:Cr6sJpBX2a0gAIgLa32+NY69h/UZtuN6L1ZdXtP9upo=
+>>>>>>> 1d9f578 (build: 依赖地板对齐——pkg → v0.61.2)
 github.com/onsi/ginkgo v1.6.0/go.mod h1:lLunBs/Ym6LB5Z9jYTR76FiuTmxDTDusOGeTQH+WWjE=
 github.com/onsi/ginkgo v1.8.0/go.mod h1:lLunBs/Ym6LB5Z9jYTR76FiuTmxDTDusOGeTQH+WWjE=
 github.com/onsi/gomega v1.5.0/go.mod h1:ex+gbHU/CVuBBDIJjb2X0qEXbFg53c61hWP/1CpauHY=

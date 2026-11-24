@@ -7,7 +7,11 @@ require (
 	github.com/cloudwego/eino v0.9.21
 	github.com/oagentkit/guardx v0.30.0
 	github.com/oagentkit/textx v0.13.0
+<<<<<<< HEAD
 	github.com/oekit/pkg v0.61.1
+=======
+	github.com/oekit/pkg v0.61.2
+>>>>>>> 1d9f578 (build: 依赖地板对齐——pkg → v0.61.2)
 	gopkg.in/yaml.v3 v3.0.1
 )
 
