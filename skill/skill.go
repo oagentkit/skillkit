@@ -1,6 +1,9 @@
 // Package skill 技能内容与元数据：SKILL.md 解析（frontmatter 围栏 + canonical
 // checksum）、进程内技能库（多根扫描、热替换）、版本区间约束（decl/version）、
 // 决策式按需加载（decision.go 的 use_skill 渐进披露）。
+//
+// 生命周期: Experimental——未过一个 minor 无 breaking 窗口（api-compat.md 晋级条件一），初值如实记为不承诺兼容。
+//
 // 内容文件解析带路径遍历保护（`..` 段拒绝；注意 symlink 不在防护范围——root
 // 应为可信目录）；文件解析部分零外部依赖，决策使用依赖 eino。
 package skill

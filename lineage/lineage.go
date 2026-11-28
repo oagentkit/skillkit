@@ -4,6 +4,8 @@
 // 结构化影响清单（version/maturity 跃迁、工具面增减、引用边增减）；Focus 提供
 // 焦点邻接子图（控制台血缘视图）。
 //
+// 生命周期: Experimental——未过一个 minor 无 breaking 窗口（api-compat.md 晋级条件一），初值如实记为不承诺兼容。
+//
 // 本包只管图的机制（组装/diff/遍历/并发读）；「有效技能集如何确定」「清单如何
 // 加载」是装配方的事——经 Expert/Skill 中性输入注入，不依赖任何具体装配实现。
 package lineage

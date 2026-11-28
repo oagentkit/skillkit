@@ -4,6 +4,8 @@
 // skills/ 扫描共用——布局演进单点修改）。本包承载跨包的 MCP 工具面契约清单
 // ——加载规则（基线/整文件覆盖/字典序冲突）为唯一事实源，调用方
 // （reload 校验、lint、血缘）共享同一份加载语义。
+//
+// 生命周期: Experimental——未过一个 minor 无 breaking 窗口（api-compat.md 晋级条件一），初值如实记为不承诺兼容。
 package pack
 
 import (
