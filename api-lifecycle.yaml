@@ -1,0 +1,21 @@
+# api-lifecycle 定级清单（判据同源 matrix-tools docs/adr/ADR-002 引用的
+# yi-nology/goagent-kernel docs/api-compat.md：breaking 四类 / 三级承诺 / 晋级三维）
+#
+# 纪律：新增生产包 ⇒ 本清单同步登记 + 包注释打 `// 生命周期: <级别>` 标记；
+# reason 每条必填——定级是一份承诺，没有理由的承诺无从复核。
+# 门禁：matrix-tools scripts/verify_api_lifecycle.py（覆盖双向 + 标记对账）。
+
+version: 1
+packages:
+  - pkg: skill
+    level: Experimental
+    since: v0.10.7
+    reason: 技能内容与元数据——SKILL.md 解析（frontmatter 围栏 + canonical checksum）、进程内技能库（多根扫描/热替换）与决策式按需加载（use_skill 渐进披露）；未过一个 minor 无 breaking 窗口（api-compat.md 晋级条件一），初值如实记为不承诺兼容
+  - pkg: pack
+    level: Experimental
+    since: v0.10.7
+    reason: 领域包（expert/pack 目录布局）的契约面——`_shared/` + `<包>/` 布局约定与 MCP 工具面加载规则（基线/整文件覆盖/字典序冲突）的单一事实源；未过一个 minor 无 breaking 窗口（api-compat.md 晋级条件一），初值如实记为不承诺兼容
+  - pkg: lineage
+    level: Experimental
+    since: v0.10.7
+    reason: 装配血缘——expert → skill → MCP server 三类资产节点的声明式依赖图，used_by/granted_by 反查字段单一事实源，Diff 产出 reload 前后影响清单；未过一个 minor 无 breaking 窗口（api-compat.md 晋级条件一），初值如实记为不承诺兼容
